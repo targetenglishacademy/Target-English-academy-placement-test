@@ -1,0 +1,842 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Target English Academy — English Level Test</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<script type="module">
+  // On-device speech-to-text (OpenAI Whisper, tiny English model) via Transformers.js.
+  // Runs entirely in the browser over WebAssembly — no server, no API key, no cost,
+  // and unlike the old Web Speech API this works on Safari/Firefox/iOS too.
+  // First use downloads the model (~75MB) and caches it; later uses are fast.
+  import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0';
+  env.allowLocalModels = false;
+
+  let asrPromise = null;
+  function getASR(){
+    if(!asrPromise){
+      asrPromise = pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny.en');
+    }
+    return asrPromise;
+  }
+  // Kick off the model download early (called when the test starts) so it's
+  // likely cached by the time the student reaches the speaking section.
+  window.__preloadASR = function(){ getASR().catch(()=>{}); };
+
+  window.__transcribeAudio = async function(url){
+    const asr = await getASR();
+    const result = await asr(url);
+    return (result && result.text) ? result.text.trim() : '';
+  };
+</script>
+<style>
+  :root{
+    --paper:#FBFAF7;
+    --paper-dim:#F2F0E9;
+    --ink:#1C2333;
+    --ink-soft:#5B6274;
+    --rule:#D8D3C4;
+    --accent:#3B6E5E;
+    --accent-soft:#E4EEE9;
+    --flag:#B5542A;
+    --flag-soft:#F5E7DE;
+    --radius:3px;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html{-webkit-text-size-adjust:100%;}
+  body{
+    margin:0;
+    background:var(--paper);
+    color:var(--ink);
+    font-family:'IBM Plex Sans', sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .shell{
+    max-width:640px;
+    margin:0 auto;
+    padding:28px 20px 80px;
+    min-height:100vh;
+  }
+  h1,h2,h3{
+    font-family:'Newsreader', serif;
+    font-weight:600;
+    line-height:1.15;
+    margin:0 0 10px;
+  }
+  p{line-height:1.6;color:var(--ink-soft);margin:0 0 14px;}
+  .rule{border:none;border-top:1px solid var(--rule);margin:20px 0;}
+
+  .topbar{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;font-size:13px;color:var(--ink-soft);}
+  .progress-track{height:2px;background:var(--rule);margin-bottom:26px;}
+  .progress-fill{height:2px;background:var(--accent);transition:width .3s ease;}
+
+  .intro-title{font-size:34px;}
+  .facts{display:grid;grid-template-columns:1fr 1fr;gap:0;border-top:1px solid var(--rule);margin:22px 0;}
+  .fact{padding:14px 0;border-bottom:1px solid var(--rule);}
+  .fact:nth-child(odd){border-right:1px solid var(--rule);padding-right:14px;}
+  .fact:nth-child(even){padding-left:14px;}
+  .fact-num{font-family:'Newsreader',serif;font-size:22px;color:var(--ink);}
+  .fact-label{font-size:13px;color:var(--ink-soft);}
+  .mic-note{background:var(--accent-soft);border-left:3px solid var(--accent);padding:12px 14px;font-size:14px;color:var(--ink);margin:20px 0;border-radius:0 var(--radius) var(--radius) 0;}
+  .mic-note strong{display:block;margin-bottom:3px;font-family:'Newsreader',serif;font-weight:600;}
+
+  button{font-family:'IBM Plex Sans', sans-serif;cursor:pointer;-webkit-appearance:none;appearance:none;}
+  .btn{display:inline-block;background:var(--ink);color:var(--paper);border:none;padding:14px 26px;font-size:15px;font-weight:500;border-radius:var(--radius);min-height:48px;}
+  .btn:hover{background:#000;}
+  .btn:disabled{background:var(--rule);color:var(--ink-soft);cursor:not-allowed;}
+  .btn-outline{background:transparent;color:var(--ink);border:1px solid var(--rule);padding:13px 25px;font-size:15px;border-radius:var(--radius);min-height:48px;}
+  .btn-outline:hover{border-color:var(--ink);}
+  .btn-row{display:flex;justify-content:space-between;align-items:center;margin-top:26px;flex-wrap:wrap;gap:10px;}
+  .btn-row .spacer{flex:1;}
+  .skip-link{background:none;border:none;color:var(--ink-soft);font-size:14px;text-decoration:underline;text-underline-offset:3px;padding:12px 4px;min-height:44px;}
+
+  .section-tag{font-size:13px;color:var(--accent);font-weight:500;margin-bottom:8px;}
+  .qcount{font-size:13px;color:var(--ink-soft);}
+
+  .qtext{font-size:22px;margin-bottom:22px;}
+  .options{list-style:none;margin:0;padding:0;}
+  .option{border:1px solid var(--rule);border-radius:var(--radius);padding:15px 16px;margin-bottom:10px;font-size:16px;cursor:pointer;transition:border-color .15s ease, background .15s ease;-webkit-user-select:none;user-select:none;}
+  .option:hover{border-color:var(--ink);}
+  .option.selected{border-color:var(--accent);background:var(--accent-soft);}
+
+  .audio-box{border:1px solid var(--rule);border-radius:var(--radius);padding:22px;text-align:center;margin-bottom:22px;}
+  .play-btn{width:64px;height:64px;border-radius:50%;background:var(--ink);color:var(--paper);border:none;font-size:22px;display:inline-flex;align-items:center;justify-content:center;margin-bottom:10px;}
+  .play-btn:hover{background:#000;}
+  .play-hint{font-size:13px;color:var(--ink-soft);}
+
+  textarea{width:100%;min-height:140px;border:1px solid var(--rule);border-radius:var(--radius);padding:14px;font-family:'IBM Plex Sans', sans-serif;font-size:16px;color:var(--ink);resize:vertical;}
+  textarea:focus{outline:2px solid var(--accent);outline-offset:1px;}
+  .word-count{font-size:13px;color:var(--ink-soft);margin-top:8px;text-align:right;}
+
+  .rec-box{border:1px solid var(--rule);border-radius:var(--radius);padding:24px;text-align:center;}
+  .rec-btn{width:76px;height:76px;border-radius:50%;background:var(--flag);color:var(--paper);border:none;font-size:24px;display:inline-flex;align-items:center;justify-content:center;margin-bottom:12px;}
+  .rec-btn.recording{background:#8f3a1c;}
+  .rec-status{font-size:14px;color:var(--ink-soft);margin-bottom:14px;}
+  audio{width:100%;margin-top:12px;}
+  .mic-error{background:var(--flag-soft);color:var(--flag);border-left:3px solid var(--flag);padding:10px 14px;font-size:14px;border-radius:0 var(--radius) var(--radius) 0;margin-top:14px;text-align:left;}
+  .transcript-box{margin-top:14px;padding:12px 14px;background:var(--paper-dim);border-radius:var(--radius);font-size:14px;color:var(--ink-soft);text-align:left;min-height:20px;}
+  .transcript-box .label{display:block;font-size:12px;color:var(--accent);margin-bottom:4px;font-weight:500;}
+
+  .result-level{font-family:'Newsreader',serif;font-size:72px;font-weight:600;line-height:1;margin:10px 0 4px;}
+  .result-name{font-size:18px;color:var(--ink-soft);margin-bottom:28px;}
+  .breakdown-row{display:flex;justify-content:space-between;align-items:center;padding:13px 0;border-bottom:1px solid var(--rule);font-size:15px;}
+  .breakdown-row .lvl{font-family:'Newsreader',serif;font-weight:600;width:36px;}
+  .breakdown-row .bar-track{flex:1;height:6px;background:var(--paper-dim);margin:0 14px;border-radius:3px;overflow:hidden;}
+  .breakdown-row .bar-fill{height:100%;background:var(--accent);}
+  .breakdown-row .sc{width:44px;text-align:right;color:var(--ink-soft);font-size:13px;}
+
+  .estimate-card{border:1px solid var(--rule);border-radius:var(--radius);padding:20px;margin:16px 0;}
+  .estimate-level{font-family:'Newsreader',serif;font-size:40px;font-weight:600;margin-bottom:2px;}
+  .estimate-note{font-size:13px;color:var(--ink-soft);}
+
+  .hidden{display:none !important;}
+
+  @media (max-width:420px){
+    .intro-title{font-size:28px;}
+    .qtext{font-size:19px;}
+    .result-level{font-size:58px;}
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <section id="screen-intro">
+    <h1 class="intro-title" style="font-size:28px;">Target English Academy</h1>
+    <p style="font-family:'Newsreader',serif;font-style:italic;font-size:18px;color:var(--ink);margin-top:-6px;">English Level Test</p>
+    <p>Dil bilgisi, okuma, kelime bilgisi, dinleme, yazma ve konuşma becerilerini ölçen bir seviye tespit sınavıdır — A1 ile C1 arasında sonuç verir. Telefon, tablet veya bilgisayardan yapılabilir.</p>
+
+    <div class="facts">
+      <div class="fact"><div class="fact-num">60</div><div class="fact-label">soru</div></div>
+      <div class="fact"><div class="fact-num">80</div><div class="fact-label">dakika süre</div></div>
+      <div class="fact"><div class="fact-num">A1–C1</div><div class="fact-label">sonuç aralığı</div></div>
+      <div class="fact"><div class="fact-num">6</div><div class="fact-label">beceri alanı</div></div>
+    </div>
+
+    <div class="mic-note">
+      <strong>Konuşma bölümü hakkında</strong>
+      Son bölümde kısa konuşma cevaplarınızı kaydedebilmek için mikrofon kullanılır ve cevaplarınız otomatik olarak yazıya dökülür. Bu bölümü atlayabilirsiniz, diğer beceriler için yine de tam bir sonuç alırsınız. Tarayıcınız mikrofon izni isterse lütfen izin verin. (Yazıya dökme özelliği ilk kullanımda küçük bir dosya indirir, bu yüzden sınava başlarken internete bağlı olmanız gerekir.)
+    </div>
+
+    <div class="mic-note" style="background:var(--flag-soft);border-left-color:var(--flag);">
+      <strong>Süre uyarısı</strong>
+      Sınavı tamamlamak için toplam 80 dakikanız var. Süre dolduğunda sınav otomatik olarak sonlanır ve o ana kadar verdiğiniz cevaplar değerlendirilir.
+    </div>
+
+    <div style="margin:20px 0;">
+      <label for="student-name" style="display:block;font-size:14px;margin-bottom:6px;">Öğrencinin Adı Soyadı *</label>
+      <input type="text" id="student-name" placeholder="Örn. Ayşe Yılmaz" required style="width:100%;border:1px solid var(--rule);border-radius:var(--radius);padding:13px 14px;font-family:'IBM Plex Sans',sans-serif;font-size:16px;color:var(--ink);">
+
+      <label for="parent-name" style="display:block;font-size:14px;margin:14px 0 6px;">Veli Adı Soyadı *</label>
+      <input type="text" id="parent-name" placeholder="Örn. Fatma Yılmaz" required style="width:100%;border:1px solid var(--rule);border-radius:var(--radius);padding:13px 14px;font-family:'IBM Plex Sans',sans-serif;font-size:16px;color:var(--ink);">
+
+      <label for="student-job" style="display:block;font-size:14px;margin:14px 0 6px;">Mesleğiniz / Sınıfınız *</label>
+      <input type="text" id="student-job" placeholder="Örn. 9. Sınıf veya Mühendis" required style="width:100%;border:1px solid var(--rule);border-radius:var(--radius);padding:13px 14px;font-family:'IBM Plex Sans',sans-serif;font-size:16px;color:var(--ink);">
+
+      <label for="student-email" style="display:block;font-size:14px;margin:14px 0 6px;">E-posta Adresiniz *</label>
+      <input type="email" id="student-email" placeholder="ornek@eposta.com" required style="width:100%;border:1px solid var(--rule);border-radius:var(--radius);padding:13px 14px;font-family:'IBM Plex Sans',sans-serif;font-size:16px;color:var(--ink);">
+
+      <label for="student-phone" style="display:block;font-size:14px;margin:14px 0 6px;">Telefon Numaranız *</label>
+      <input type="tel" id="student-phone" placeholder="05xx xxx xx xx" required style="width:100%;border:1px solid var(--rule);border-radius:var(--radius);padding:13px 14px;font-family:'IBM Plex Sans',sans-serif;font-size:16px;color:var(--ink);">
+    </div>
+
+    <div style="margin:20px 0;display:flex;gap:10px;align-items:flex-start;">
+      <input type="checkbox" id="kvkk-consent" style="margin-top:4px;width:18px;height:18px;flex-shrink:0;">
+      <label for="kvkk-consent" style="font-size:13px;color:var(--ink-soft);line-height:1.5;">Bunu onaylayarak, Kişisel Verilerin Korunması Kanunu (KVKK) kapsamında, verdiğiniz kişisel bilgilerin (e-posta, telefon, meslek vb.) sınav amacıyla toplanmasını, işlenmesini ve saklanmasını kabul ediyorum. *</label>
+    </div>
+
+    <button class="btn" id="start-btn" style="width:100%;padding:16px;font-size:16px;" disabled>Sınava Başla</button>
+  </section>
+
+  <section id="screen-test" class="hidden">
+    <div class="topbar">
+      <span id="section-name">Grammar &amp; Vocabulary</span>
+      <span id="timer-display" style="font-weight:600;color:var(--ink);"></span>
+      <span id="q-position" class="qcount">1 / 60</span>
+    </div>
+    <div class="progress-track"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+
+    <div id="q-body"></div>
+
+    <div class="btn-row">
+      <button class="skip-link" id="skip-btn">Skip this question</button>
+      <div class="spacer"></div>
+      <button class="btn" id="next-btn" disabled>Next</button>
+    </div>
+  </section>
+
+  <section id="screen-results" class="hidden">
+    <p class="section-tag">Objective result</p>
+    <div class="result-level" id="result-level">B1</div>
+    <div class="result-name" id="result-name">Intermediate</div>
+    <p id="result-desc"></p>
+    <p style="font-size:13px;">Based on the 45 scored grammar, reading, vocabulary and listening items.</p>
+
+    <hr class="rule">
+    <h3>Score by level</h3>
+    <div id="breakdown"></div>
+
+    <hr class="rule">
+    <p class="section-tag">Estimated result</p>
+    <h3 style="margin-bottom:14px;">Writing &amp; speaking</h3>
+    <div class="estimate-card">
+      <div class="estimate-level" id="estimate-level">—</div>
+      <div class="estimate-note" id="estimate-note"></div>
+    </div>
+    <p id="ws-summary"></p>
+
+    <div class="btn-row">
+      <button class="btn-outline" id="retake-btn">Retake test</button>
+      <div class="spacer"></div>
+      <button class="btn" id="review-btn">Review answers</button>
+    </div>
+
+    <div id="recordings-review" class="hidden" style="margin-top:24px;"></div>
+  </section>
+
+</div>
+
+<script>
+/* ============================================================
+   QUESTION BANK — original items written for this test.
+============================================================ */
+
+const mcq = [
+  {level:'A1', q:'My brother ___ football every Saturday.', options:['play','plays','playing','played'], answer:1},
+  {level:'A1', q:'There ___ two cats in the garden.', options:['is','are','be','was'], answer:1},
+  {level:'A1', q:'I usually ___ up at seven o\u2019clock.', options:['get','gets','getting','got'], answer:0},
+  {level:'A1', q:'She is my mother. He is my ___.', options:['father','uncle','brother','cousin'], answer:0},
+  {level:'A1', q:'The keys are ___ the table.', options:['on','in','at','into'], answer:0},
+  {level:'A1', q:'We ___ from Canada.', options:['am','is','are','be'], answer:2},
+  {level:'A1', q:'This is ___ apple.', options:['a','an','the','\u2014'], answer:1},
+  {level:'A2', q:'Yesterday, I ___ to the cinema with my friends.', options:['go','went','goes','going'], answer:1},
+  {level:'A2', q:'This backpack is ___ than that one.', options:['heavy','heavier','heaviest','more heavy'], answer:1},
+  {level:'A2', q:'We ___ going to visit our grandparents next weekend.', options:['is','are','am','be'], answer:1},
+  {level:'A2', q:'He hasn\u2019t finished his homework ___.', options:['already','yet','still','ever'], answer:1},
+  {level:'A2', q:'Could you ___ me your pen, please?', options:['lend','borrow','give','take'], answer:0},
+  {level:'A2', q:'I ___ tired, so I went to bed early.', options:['was','were','am','be'], answer:0},
+  {level:'A2', q:'They live ___ a small town near the coast.', options:['in','at','on','to'], answer:0},
+  {level:'B1', q:'She ___ in this city since 2015.', options:['lives','lived','has lived','is living'], answer:2},
+  {level:'B1', q:'If it rains tomorrow, we ___ the picnic.', options:['cancel','will cancel','cancelled','would cancel'], answer:1},
+  {level:'B1', q:'You ___ wear a helmet when you ride a motorbike here \u2014 it\u2019s the law.', options:['must','might','could','would'], answer:0},
+  {level:'B1', q:'By the time we arrived, the film ___ already started.', options:['has','had','was','is'], answer:1},
+  {level:'B1', q:'I\u2019m looking forward ___ you next month.', options:['to see','to seeing','seeing','see'], answer:1},
+  {level:'B1', q:'He suggested ___ a different route to avoid traffic.', options:['to take','taking','take','took'], answer:1},
+  {level:'B1', q:'This is the restaurant ___ we had our first date.', options:['where','which','who','when'], answer:0},
+  {level:'B2', q:'The bridge ___ in 1932 and is still in use today.', options:['built','was built','has built','is building'], answer:1},
+  {level:'B2', q:'She told me she ___ the report by Friday.', options:['will finish','would finish','finishes','finished'], answer:1},
+  {level:'B2', q:'If I ___ known about the meeting, I would have come.', options:['had','have','would have','was'], answer:0},
+  {level:'B2', q:'The manager insisted ___ present at every meeting.', options:['on being','to be','being','be'], answer:0},
+  {level:'B2', q:'Despite ___ hard, he didn\u2019t pass the exam.', options:['study','studying','studied','to study'], answer:1},
+  {level:'B2', q:'Hardly ___ when it started raining.', options:['had we started','we had started','we started','did we start'], answer:0},
+  {level:'B2', q:'It\u2019s high time you ___ a decision.', options:['make','made','making','will make'], answer:1},
+  {level:'C1', q:'Not once ___ to apologize for the delay.', options:['did she remember','she remembered','she did remember','remembered she'], answer:0},
+  {level:'C1', q:'The committee recommended that the proposal ___ reconsidered.', options:['be','is','was','will be'], answer:0},
+  {level:'C1', q:'No sooner ___ the announcement than the shares fell sharply.', options:['had the company made','the company had made','did the company make','made the company'], answer:0},
+  {level:'C1', q:'She\u2019s the kind of person who finds a way through, ___ the odds.', options:['regardless of','despite of','in spite','notwithstanding of'], answer:0},
+  {level:'C1', q:'Were it not for his quick thinking, the accident ___ far worse.', options:['would have been','had been','would be','was'], answer:0},
+  {level:'C1', q:'The report\u2019s findings, ___ compelling, failed to convince the board.', options:['while','despite','although being','even'], answer:0},
+  {level:'C1', q:'Little ___ that the decision would change the course of the company.', options:['he knew','did he know','he did know','knew he'], answer:1},
+];
+
+const listening = [
+  {level:'A1', audio:'Hi, my name is Anna. I am twenty years old and I live in Madrid.', q:'How old is Anna?', options:['18','20','22','25'], answer:1},
+  {level:'A1', audio:'The train to Manchester leaves platform four at half past nine.', q:'What platform does the train leave from?', options:['Two','Four','Nine','Thirty'], answer:1},
+  {level:'A2', audio:'Would you like a coffee? No thanks, I would prefer a tea if that is okay.', q:'What does the second speaker want?', options:['Coffee','Tea','Water','Nothing'], answer:1},
+  {level:'A2', audio:'Because of the storm, the flight has been delayed by two hours.', q:'Why is the flight delayed?', options:['A mechanical problem','A storm','A staff strike','A full plane'], answer:1},
+  {level:'B1', audio:'I used to hate vegetables when I was a kid, but now I actually enjoy them.', q:'How does the speaker feel about vegetables now?', options:['Hates them','Feels neutral','Enjoys them','Never eats them'], answer:2},
+  {level:'B1', audio:'If the weather holds, we are planning to hike up to the ridge and camp there overnight.', q:'What are they planning to do?', options:['Drive to the coast','Hike and camp','Stay home','Go fishing'], answer:1},
+  {level:'B2', audio:'The committee has decided to postpone the vote until further evidence is submitted.', q:'What has the committee decided?', options:['To cancel the vote','To postpone the vote','To approve it immediately','To resign'], answer:1},
+  {level:'B2', audio:'Despite the setbacks, the team managed to deliver the project ahead of schedule.', q:'How did the project turn out?', options:['Delivered late','Delivered ahead of schedule','Cancelled','Delivered exactly on time'], answer:1},
+  {level:'C1', audio:'What struck me most about the lecture was not the data itself, but how skeptically the professor treated her own conclusions.', q:'What impressed the speaker most?', options:['The data','The professor\u2019s skepticism','The length of the lecture','The audience\u2019s questions'], answer:1},
+  {level:'C1', audio:'The proposal, for all its ambition, glosses over the practical constraints that will likely derail it.', q:'What is the speaker\u2019s attitude toward the proposal?', options:['Fully supportive','Cautiously critical','Completely indifferent','Enthusiastically neutral'], answer:1},
+];
+
+const writing = [
+  {level:'A1', prompt:'Describe your family in 2\u20133 sentences.'},
+  {level:'A1', prompt:'Write about your daily routine \u2014 what time you wake up, eat, and go to sleep.'},
+  {level:'A2', prompt:'Write a short message to a friend inviting them to a party.'},
+  {level:'A2', prompt:'Describe your favorite place in your town or city.'},
+  {level:'B1', prompt:'Write about a memorable trip you took. What happened?'},
+  {level:'B1', prompt:'Give your opinion: is it better to live in a city or in the countryside? Why?'},
+  {level:'B2', prompt:'Write a short email to a colleague explaining why a project deadline needs to move.'},
+  {level:'B2', prompt:'Discuss one advantage and one disadvantage of remote work.'},
+  {level:'C1', prompt:'Write a short argument for or against regulating social media, addressing a likely counterargument.'},
+  {level:'C1', prompt:'Reflect on a decision you once regretted and what you learned from it.'},
+];
+
+const speaking = [
+  {level:'A2', prompt:'Introduce yourself: your name, where you\u2019re from, and one hobby.'},
+  {level:'B1', prompt:'Describe your last holiday in about 30 seconds.'},
+  {level:'B1', prompt:'Talk about a book or film you recently enjoyed, and why.'},
+  {level:'B2', prompt:'Explain a problem you solved recently at school or work.'},
+  {level:'C1', prompt:'Give your opinion on whether technology has made life better or worse, with an example.'},
+];
+
+/* ============================================================
+   EMAIL SETTINGS — fill these in with your EmailJS account
+   details. Leave EMAILJS_SERVICE_ID as 'YOUR_SERVICE_ID' to
+   disable emailing results.
+============================================================ */
+const EMAILJS_SERVICE_ID = 'service_spaqg7s';
+const EMAILJS_TEMPLATE_ID = 'template_cdbd604';
+const EMAILJS_PUBLIC_KEY = '16IW5GFRrAAKvoApT';
+const RESULTS_EMAIL = 'targetacademyenglish@gmail.com';
+
+if(EMAILJS_PUBLIC_KEY && EMAILJS_PUBLIC_KEY !== 'YOUR_PUBLIC_KEY' && window.emailjs){
+  emailjs.init({publicKey: EMAILJS_PUBLIC_KEY});
+}
+
+const LEVELS = ['A1','A2','B1','B2','C1'];
+const LEVEL_NAMES = {A1:'Beginner', A2:'Elementary', B1:'Intermediate', B2:'Upper Intermediate', C1:'Advanced'};
+const LEVEL_DESC = {
+  A1:'You understand and use familiar everyday expressions and very basic phrases.',
+  A2:'You communicate in simple, routine tasks on familiar topics and activities.',
+  B1:'You deal with most situations while travelling and describe experiences, events and opinions.',
+  B2:'You interact fluently and understand complex texts on concrete and abstract topics.',
+  C1:'You use language flexibly and effectively for social, academic and professional purposes.'
+};
+
+const CONNECTORS = {
+  b1: ['although','however','because','so that','while','unless','since','as soon as'],
+  b2: ['despite','whereas','provided that','in spite of','as a result','on the other hand','nevertheless','moreover','in order to'],
+  c1: ['notwithstanding','albeit','insofar as','given that','whereby','were it not for','arguably','for all its','glosses over']
+};
+
+/* ============================================================
+   TEXT / SPEECH ANALYSIS — heuristic estimate only, not AI grading.
+============================================================ */
+function analyzeWritten(text){
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  const wc = words.length;
+  if(wc<3) return null; // too little to score meaningfully \u2014 treat like unanswered
+  const sentences = text.split(/[.!?]+/).map(s=>s.trim()).filter(Boolean);
+  const avgLen = sentences.length ? wc/sentences.length : wc;
+  const lower = text.toLowerCase();
+  const hasB1 = CONNECTORS.b1.some(c=>lower.includes(c));
+  const hasB2 = CONNECTORS.b2.some(c=>lower.includes(c));
+  const hasC1 = CONNECTORS.c1.some(c=>lower.includes(c));
+  const longWords = words.filter(w=>w.replace(/[^a-zA-Z]/g,'').length>=7).length;
+  const longRatio = longWords/wc;
+
+  let points = 0;
+  if(wc>=12) points++;
+  if(wc>=35) points++;
+  if(avgLen>=9) points++;
+  if(avgLen>=15) points++;
+  if(hasB1) points++;
+  if(hasB2) points++;
+  if(hasC1) points++;
+  if(longRatio>=0.12) points++;
+  return points/2; // scaled to 0-4 (A1-C1)
+}
+
+function analyzeSpoken(transcript){
+  const words = transcript.trim().split(/\s+/).filter(Boolean);
+  const wc = words.length;
+  if(wc<3) return null; // too little to score meaningfully \u2014 treat like unanswered
+  const lower = transcript.toLowerCase();
+  const hasB1 = CONNECTORS.b1.some(c=>lower.includes(c));
+  const hasB2 = CONNECTORS.b2.some(c=>lower.includes(c));
+  const hasC1 = CONNECTORS.c1.some(c=>lower.includes(c));
+  const longWords = words.filter(w=>w.replace(/[^a-zA-Z]/g,'').length>=7).length;
+  const longRatio = longWords/wc;
+  const uniqueRatio = new Set(words.map(w=>w.toLowerCase())).size/wc;
+
+  let points = 0;
+  if(wc>=18) points++;
+  if(wc>=45) points++;
+  if(uniqueRatio>=0.55) points++;
+  if(hasB1) points++;
+  if(hasB2) points++;
+  if(hasC1) points++;
+  if(longRatio>=0.10) points++;
+  return points/1.75; // scaled to 0-4
+}
+
+/* ============================================================
+   TEST FLOW
+============================================================ */
+const queue = [
+  ...mcq.map((item,i)=>({type:'mcq', ...item, id:'mcq-'+i})),
+  ...listening.map((item,i)=>({type:'listening', ...item, id:'lst-'+i})),
+  ...writing.map((item,i)=>({type:'writing', ...item, id:'wrt-'+i})),
+  ...speaking.map((item,i)=>({type:'speaking', ...item, id:'spk-'+i})),
+];
+const TOTAL = queue.length;
+
+let idx = 0;
+let currentAnswer = null;
+const results = { mcq:{}, listening:{}, writing:{}, speaking:{}, transcripts:{} };
+let mediaRecorder=null, recordedChunks=[], recordingSeconds=0, recTimer=null;
+
+const screenIntro = document.getElementById('screen-intro');
+const screenTest = document.getElementById('screen-test');
+const screenResults = document.getElementById('screen-results');
+const qBody = document.getElementById('q-body');
+const nextBtn = document.getElementById('next-btn');
+const skipBtn = document.getElementById('skip-btn');
+const sectionName = document.getElementById('section-name');
+const qPosition = document.getElementById('q-position');
+const progressFill = document.getElementById('progress-fill');
+
+let studentName = '';
+let parentName = '';
+let studentJob = '';
+let studentEmail = '';
+let studentPhone = '';
+const nameInput = document.getElementById('student-name');
+const parentInput = document.getElementById('parent-name');
+const jobInput = document.getElementById('student-job');
+const emailInput = document.getElementById('student-email');
+const phoneInput = document.getElementById('student-phone');
+const consentInput = document.getElementById('kvkk-consent');
+const startBtn = document.getElementById('start-btn');
+const requiredIntroInputs = [nameInput, parentInput, jobInput, emailInput, phoneInput];
+function checkIntroComplete(){
+  const allFilled = requiredIntroInputs.every(inp => inp.value.trim().length>0);
+  startBtn.disabled = !(allFilled && consentInput.checked);
+}
+requiredIntroInputs.forEach(inp => inp.addEventListener('input', checkIntroComplete));
+consentInput.addEventListener('change', checkIntroComplete);
+
+const TEST_DURATION_SECONDS = 80 * 60;
+let timeRemaining = TEST_DURATION_SECONDS;
+let testTimerId = null;
+const timerDisplay = document.getElementById('timer-display');
+function formatTime(sec){
+  const m = Math.floor(sec/60), s = String(sec%60).padStart(2,'0');
+  return m+':'+s;
+}
+function startTestTimer(){
+  timeRemaining = TEST_DURATION_SECONDS;
+  timerDisplay.textContent = 'Time left: '+formatTime(timeRemaining);
+  testTimerId = setInterval(()=>{
+    timeRemaining--;
+    timerDisplay.textContent = 'Time left: '+formatTime(timeRemaining);
+    if(timeRemaining <= 300) timerDisplay.style.color = 'var(--flag)';
+    if(timeRemaining <= 0){
+      clearInterval(testTimerId);
+      saveCurrentAnswer();
+      stopAnyRecordingStream();
+      showResults();
+    }
+  }, 1000);
+}
+function stopTestTimer(){
+  if(testTimerId){ clearInterval(testTimerId); testTimerId=null; }
+}
+
+document.getElementById('start-btn').addEventListener('click', ()=>{
+  studentName = nameInput.value.trim();
+  parentName = parentInput.value.trim();
+  studentJob = jobInput.value.trim();
+  studentEmail = emailInput.value.trim();
+  studentPhone = phoneInput.value.trim();
+  screenIntro.classList.add('hidden');
+  screenTest.classList.remove('hidden');
+  startTestTimer();
+  if(window.__preloadASR) window.__preloadASR();
+  renderQuestion();
+});
+
+skipBtn.addEventListener('click', ()=>{ advance(); });
+nextBtn.addEventListener('click', ()=>{ advance(); });
+
+function sectionLabel(type){
+  return {mcq:'Grammar, reading & vocabulary', listening:'Listening', writing:'Writing', speaking:'Speaking'}[type];
+}
+
+function advance(){
+  saveCurrentAnswer();
+  stopAnyRecordingStream();
+  idx++;
+  if(idx>=TOTAL){ showResults(); return; }
+  renderQuestion();
+}
+
+function saveCurrentAnswer(){
+  const item = queue[idx];
+  if(item.type==='mcq' && currentAnswer!==null){
+    results.mcq[item.id] = currentAnswer===item.answer;
+  } else if(item.type==='listening' && currentAnswer!==null){
+    results.listening[item.id] = currentAnswer===item.answer;
+  } else if(item.type==='writing'){
+    const ta = document.getElementById('writing-input');
+    if(ta) results.writing[item.id] = ta.value.trim();
+  } else if(item.type==='speaking'){
+    if(item._blobUrl) results.speaking[item.id] = {url:item._blobUrl, prompt:item.prompt};
+    if(item._transcript) results.transcripts[item.id] = item._transcript;
+  }
+}
+
+function renderQuestion(){
+  const item = queue[idx];
+  currentAnswer = null;
+  nextBtn.disabled = true;
+  nextBtn.textContent = idx===TOTAL-1 ? 'See results' : 'Next';
+  sectionName.textContent = sectionLabel(item.type);
+  qPosition.textContent = (idx+1)+' / '+TOTAL;
+  progressFill.style.width = ((idx)/TOTAL*100)+'%';
+  skipBtn.classList.remove('hidden');
+
+  if(item.type==='mcq') renderMCQ(item);
+  else if(item.type==='listening') renderListening(item);
+  else if(item.type==='writing') renderWriting(item);
+  else if(item.type==='speaking') renderSpeaking(item);
+}
+
+function renderMCQ(item){
+  qBody.innerHTML = '<p class="section-tag">Level band: '+item.level+'</p><div class="qtext">'+item.q+'</div><ul class="options" id="opt-list"></ul>';
+  const list = document.getElementById('opt-list');
+  item.options.forEach((opt,i)=>{
+    const li = document.createElement('li');
+    li.className='option';
+    li.textContent = opt;
+    li.addEventListener('click', ()=>{
+      [...list.children].forEach(c=>c.classList.remove('selected'));
+      li.classList.add('selected');
+      currentAnswer = i;
+      nextBtn.disabled = false;
+    });
+    list.appendChild(li);
+  });
+}
+
+function renderListening(item){
+  qBody.innerHTML = '<p class="section-tag">Listening</p><div class="audio-box"><button class="play-btn" id="play-audio">\u25B6</button><div class="play-hint">Tap to listen. You can play it more than once.</div></div><div class="qtext">'+item.q+'</div><ul class="options" id="opt-list"></ul>';
+  document.getElementById('play-audio').addEventListener('click', ()=>{ speakText(item.audio); });
+  const list = document.getElementById('opt-list');
+  item.options.forEach((opt,i)=>{
+    const li = document.createElement('li');
+    li.className='option';
+    li.textContent = opt;
+    li.addEventListener('click', ()=>{
+      [...list.children].forEach(c=>c.classList.remove('selected'));
+      li.classList.add('selected');
+      currentAnswer = i;
+      nextBtn.disabled = false;
+    });
+    list.appendChild(li);
+  });
+  setTimeout(()=>speakText(item.audio), 350);
+}
+
+function speakText(text){
+  if(!('speechSynthesis' in window)){ return; }
+  window.speechSynthesis.cancel();
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.rate = 0.95;
+  utter.lang = 'en-US';
+  window.speechSynthesis.speak(utter);
+}
+
+function renderWriting(item){
+  qBody.innerHTML = '<p class="section-tag">Writing \u00b7 Level band: '+item.level+'</p><div class="qtext">'+item.prompt+'</div><textarea id="writing-input" placeholder="Write your answer here\u2026"></textarea><div class="word-count" id="word-count">0 words</div>';
+  const ta = document.getElementById('writing-input');
+  const wc = document.getElementById('word-count');
+  ta.addEventListener('input', ()=>{
+    const words = ta.value.trim().split(/\s+/).filter(Boolean).length;
+    wc.textContent = words+' word'+(words===1?'':'s');
+    nextBtn.disabled = ta.value.trim().length===0;
+  });
+}
+
+function renderSpeaking(item){
+  item._blobUrl = null;
+  item._transcript = '';
+  qBody.innerHTML = '<p class="section-tag">Speaking \u00b7 Level band: '+item.level+'</p><div class="qtext">'+item.prompt+'</div><div class="rec-box"><button class="rec-btn" id="rec-btn">\u25CF</button><div class="rec-status" id="rec-status">Tap to record your answer</div><div id="rec-playback"></div><div class="transcript-box" id="transcript-box"><span class="label">Transcript</span><span id="transcript-text">\u2014 appears a few seconds after you stop recording \u2014</span></div></div>';
+  nextBtn.disabled = false;
+  document.getElementById('rec-btn').addEventListener('click', ()=>toggleRecording(item));
+}
+
+function pickMimeType(){
+  const candidates = ['audio/webm', 'audio/mp4', 'audio/aac', 'audio/ogg'];
+  for(const c of candidates){
+    if(window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(c)) return c;
+  }
+  return '';
+}
+
+async function toggleRecording(item){
+  const btn = document.getElementById('rec-btn');
+  const status = document.getElementById('rec-status');
+
+  if(mediaRecorder && mediaRecorder.state==='recording'){
+    mediaRecorder.stop();
+    return;
+  }
+
+  if(!navigator.mediaDevices || !window.MediaRecorder){
+    document.getElementById('rec-playback').innerHTML = '<div class="mic-error">Recording is not supported in this browser. Please try Chrome or Safari on a phone or computer, or skip this question.</div>';
+    return;
+  }
+
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+    recordedChunks = [];
+    const mimeType = pickMimeType();
+    mediaRecorder = mimeType ? new MediaRecorder(stream, {mimeType}) : new MediaRecorder(stream);
+    mediaRecorder.ondataavailable = e=>{ if(e.data.size>0) recordedChunks.push(e.data); };
+    mediaRecorder.onstop = async ()=>{
+      clearInterval(recTimer);
+      const blob = new Blob(recordedChunks, {type: mimeType || 'audio/webm'});
+      const url = URL.createObjectURL(blob);
+      item._blobUrl = url;
+      btn.classList.remove('recording');
+      btn.textContent = '\u25CF';
+      status.textContent = 'Recording saved';
+      document.getElementById('rec-playback').innerHTML = '<audio controls src="'+url+'"></audio>';
+      stream.getTracks().forEach(t=>t.stop());
+
+      const tt = document.getElementById('transcript-text');
+      if(tt) tt.textContent = 'Transcribing\u2026 (first time on this device may take a bit longer)';
+      if(window.__transcribeAudio){
+        try{
+          const text = await window.__transcribeAudio(url);
+          item._transcript = text;
+          if(tt) tt.textContent = text || '(no speech detected \u2014 you can re-record)';
+        }catch(e){
+          if(tt) tt.textContent = '(transcription failed \u2014 the recording itself is still saved)';
+        }
+      }
+    };
+    mediaRecorder.start();
+    recordingSeconds = 0;
+    btn.classList.add('recording');
+    btn.textContent = '\u25A0';
+    status.textContent = 'Recording\u2026 0:00 (tap to stop)';
+    recTimer = setInterval(()=>{
+      recordingSeconds++;
+      const m = Math.floor(recordingSeconds/60), s = String(recordingSeconds%60).padStart(2,'0');
+      status.textContent = 'Recording\u2026 '+m+':'+s+' (tap to stop)';
+    }, 1000);
+  }catch(err){
+    document.getElementById('rec-playback').innerHTML = '<div class="mic-error">Microphone access was blocked or unavailable ('+err.name+'). On iPhone, check Settings \u2192 Safari \u2192 Microphone. You can skip this question and still get a full result for the other skills.</div>';
+  }
+}
+
+function stopAnyRecordingStream(){
+  if(mediaRecorder && mediaRecorder.state==='recording'){ mediaRecorder.stop(); }
+  window.speechSynthesis && window.speechSynthesis.cancel();
+}
+
+/* ============================================================
+   SCORING
+============================================================ */
+function showResults(){
+  stopTestTimer();
+  screenTest.classList.add('hidden');
+  screenResults.classList.remove('hidden');
+
+  // Objective score: combine 35 mcq + 10 listening items, grouped by level (7+2=9 per level)
+  const levelScores = {};
+  LEVELS.forEach(lv=>{ levelScores[lv] = {correct:0,total:0}; });
+  mcq.forEach((item,i)=>{
+    levelScores[item.level].total++;
+    if(results.mcq['mcq-'+i]) levelScores[item.level].correct++;
+  });
+  listening.forEach((item,i)=>{
+    levelScores[item.level].total++;
+    if(results.listening['lst-'+i]) levelScores[item.level].correct++;
+  });
+
+  let finalLevel = null;
+  for(const lv of LEVELS){
+    const s = levelScores[lv];
+    const passed = s.correct >= Math.ceil(s.total*2/3);
+    if(passed){ finalLevel = lv; } else { break; }
+  }
+  if(!finalLevel) finalLevel = 'Pre-A1';
+
+  document.getElementById('result-level').textContent = finalLevel;
+  document.getElementById('result-name').textContent = LEVEL_NAMES[finalLevel] || 'Below A1';
+  document.getElementById('result-desc').textContent = LEVEL_DESC[finalLevel] || 'Keep practicing the basics \u2014 you\u2019re building your foundation.';
+
+  const breakdown = document.getElementById('breakdown');
+  breakdown.innerHTML = '';
+  LEVELS.forEach(lv=>{
+    const s = levelScores[lv];
+    const pct = Math.round((s.correct/s.total)*100);
+    const row = document.createElement('div');
+    row.className = 'breakdown-row';
+    row.innerHTML = '<span class="lvl">'+lv+'</span><span class="bar-track"><span class="bar-fill" style="width:'+pct+'%"></span></span><span class="sc">'+s.correct+'/'+s.total+'</span>';
+    breakdown.appendChild(row);
+  });
+
+  // Estimated writing & speaking level (heuristic, generously rounded)
+  const writingScores = writing.map((w,i)=>{
+    const t = results.writing['wrt-'+i];
+    return t ? analyzeWritten(t) : null;
+  }).filter(v=>v!==null);
+
+  const speakingScores = speaking.map((s,i)=>{
+    const t = results.transcripts['spk-'+i];
+    return t ? analyzeSpoken(t) : null;
+  }).filter(v=>v!==null);
+
+  const allScores = [...writingScores, ...speakingScores];
+  const estLevelEl = document.getElementById('estimate-level');
+  const estNoteEl = document.getElementById('estimate-note');
+
+  if(allScores.length===0){
+    estLevelEl.textContent = '\u2014';
+    estNoteEl.textContent = 'Not enough writing or speaking answers to estimate a level.';
+  } else {
+    const rawIndex = allScores.reduce((a,b)=>a+b,0) / allScores.length; // 0-4
+    // Generosity bump: writing/speaking can't be graded precisely here, so we lean the
+    // estimate a bit higher rather than risk under-placing a student. The bump is smaller
+    // than a full level, and only applies once there's real signal to begin with \u2014
+    // a response that scores essentially nothing stays at the raw level instead of being
+    // rounded all the way up.
+    const bump = rawIndex > 0 ? 0.25 : 0;
+    const bumped = Math.min(4, rawIndex + bump);
+    const displayIdx = Math.max(0, Math.min(4, Math.round(bumped)));
+    const estLevel = LEVELS[displayIdx];
+    estLevelEl.textContent = estLevel;
+    estNoteEl.textContent = 'Estimated from sentence length, connector words (e.g. "although", "despite", "were it not for") and vocabulary \u2014 not AI-graded. Shown with a small generosity margin since typed and spoken language is hard to score precisely this way. Based on '+writingScores.length+'/'+writing.length+' writing and '+speakingScores.length+'/'+speaking.length+' scoreable speaking answers.';
+  }
+
+  const speakingDone = Object.values(results.speaking).filter(Boolean).length;
+  const writingDone = Object.values(results.writing).filter(v=>v && v.length>0).length;
+  document.getElementById('ws-summary').textContent =
+    'Writing: '+writingDone+'/'+writing.length+' answered. Speaking: '+speakingDone+'/'+speaking.length+' recorded, with an on-device transcript generated for each.';
+
+  document.getElementById('review-btn').addEventListener('click', ()=>{
+    const box = document.getElementById('recordings-review');
+    box.classList.toggle('hidden');
+    if(box.classList.contains('hidden')) return;
+    box.innerHTML = '';
+    speaking.forEach((sp,i)=>{
+      const rec = results.speaking['spk-'+i];
+      const tr = results.transcripts['spk-'+i];
+      if(rec){
+        const wrap = document.createElement('div');
+        wrap.style.marginBottom='16px';
+        const dlName = 'speaking-'+(i+1)+'.webm';
+        wrap.innerHTML = '<p style="margin-bottom:6px;"><strong>'+sp.prompt+'</strong></p><audio controls src="'+rec.url+'"></audio><br><a href="'+rec.url+'" download="'+dlName+'" style="font-size:13px;color:var(--accent);">Download this recording</a>'+(tr ? '<p style="font-size:13px;margin-top:6px;">Transcript: '+tr+'</p>' : '');
+        box.appendChild(wrap);
+      }
+    });
+    writing.forEach((w,i)=>{
+      const ans = results.writing['wrt-'+i];
+      if(ans){
+        const wrap = document.createElement('div');
+        wrap.style.marginBottom='16px';
+        wrap.innerHTML = '<p style="margin-bottom:4px;"><strong>'+w.prompt+'</strong></p><p style="color:var(--ink);">'+ans+'</p>';
+        box.appendChild(wrap);
+      }
+    });
+    const hasRecordings = speaking.some((sp,i)=>results.speaking['spk-'+i]);
+    if(hasRecordings){
+      const note = document.createElement('p');
+      note.style.fontSize='13px';
+      note.innerHTML = 'Recordings aren\u2019t attached to the results email automatically \u2014 please download and send them separately if your teacher needs to hear them.';
+      box.insertBefore(note, box.firstChild);
+    }
+  }, {once:true});
+
+  document.getElementById('retake-btn').addEventListener('click', ()=>{ location.reload(); });
+
+  function estimatedLevelFor(scores){
+    if(!scores.length) return 'n/a';
+    const rawIndex = scores.reduce((a,b)=>a+b,0) / scores.length;
+    const bump = rawIndex > 0 ? 0.25 : 0;
+    const bumped = Math.min(4, rawIndex + bump);
+    const displayIdx = Math.max(0, Math.min(4, Math.round(bumped)));
+    return LEVELS[displayIdx];
+  }
+  sendResultsEmail(finalLevel, levelScores, estimatedLevelFor(allScores));
+}
+
+function sendResultsEmail(objectiveLevel, levelScores, estimatedLevel){
+  if(!window.emailjs || EMAILJS_SERVICE_ID==='YOUR_SERVICE_ID') return; // not configured yet
+
+  let breakdownText = '';
+  LEVELS.forEach(lv=>{
+    const s = levelScores[lv];
+    breakdownText += lv+': '+s.correct+'/'+s.total+'\n';
+  });
+
+  let writingText = '';
+  writing.forEach((w,i)=>{
+    const ans = results.writing['wrt-'+i];
+    if(ans) writingText += '\u2022 '+w.prompt+'\n  '+ans+'\n\n';
+  });
+
+  let speakingText = '';
+  speaking.forEach((sp,i)=>{
+    const tr = results.transcripts['spk-'+i];
+    const done = results.speaking['spk-'+i];
+    if(done) speakingText += '\u2022 '+sp.prompt+'\n  '+(tr ? 'Transcript: '+tr : '(recorded \u2014 transcription unavailable, audio not attached)')+'\n\n';
+  });
+
+  const params = {
+    to_email: RESULTS_EMAIL,
+    name: studentName || '(no name entered)',
+    parent_name: parentName || '(not provided)',
+    student_job: studentJob || '(not provided)',
+    student_phone: studentPhone || '(not provided)',
+    student_email: studentEmail || '(not provided)',
+    email: studentEmail || RESULTS_EMAIL,
+    objective_level: objectiveLevel,
+    estimated_level: estimatedLevel,
+    breakdown: breakdownText,
+    writing_answers: writingText || '(none answered)',
+    speaking_answers: speakingText || '(none recorded)',
+    taken_at: new Date().toLocaleString()
+  };
+
+  emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, params).catch(()=>{
+    // Fails silently for the student; the download options below still work as a backup.
+  });
+}
+</script>
+</body>
+</html>
