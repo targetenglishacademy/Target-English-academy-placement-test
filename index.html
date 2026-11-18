@@ -187,6 +187,13 @@
   </section>
 
   <section id="screen-results" class="hidden">
+    <p class="section-tag">Test complete</p>
+    <h2 style="margin-bottom:10px;">Thank you!</h2>
+    <p id="finish-status">Finishing your recordings…</p>
+    <p style="font-size:14px;">Your answers have been sent to Target English Academy. Your teacher will contact you with your level.</p>
+
+    <!-- The level is never shown to the student: this panel stays hidden. It is only filled for the email and the sheet. -->
+    <div id="level-panel" hidden aria-hidden="true">
     <p class="section-tag">Objective result</p>
     <div class="result-level" id="result-level">B1</div>
     <div class="result-name" id="result-name">Intermediate</div>
@@ -204,10 +211,10 @@
       <div class="estimate-level" id="estimate-level">—</div>
       <div class="estimate-note" id="estimate-note"></div>
     </div>
+    </div>
     <p id="ws-summary"></p>
 
     <div class="btn-row">
-      <button class="btn-outline" id="retake-btn">Retake test</button>
       <div class="spacer"></div>
       <button class="btn" id="review-btn">Review answers</button>
     </div>
@@ -309,6 +316,56 @@ const RESULTS_EMAIL = 'targetacademyenglish@gmail.com';
 // Leave it empty to keep using the browser's built-in (less reliable) transcript.
 const TRANSCRIBE_URL = 'https://damp-rice-b8d0.sarah-ak0306.workers.dev';
 const pendingJobs = [];
+
+// AI grading of writing & speaking runs on the same Worker (the AI key lives only there).
+// Leave AI_GRADING off (false) to go back to the old count-based estimate.
+const AI_GRADING = true;
+const GRADE_URL = TRANSCRIBE_URL ? TRANSCRIBE_URL.replace(/\/+$/,'') + '/grade' : '';
+
+// Show student text safely on the page (never as HTML).
+function escapeHtml(s){
+  return String(s==null?'':s).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+
+// Ask the Worker for CEFR levels. Returns null if anything goes wrong; the page then uses the old estimate.
+let aiResult = null;
+async function aiGrade(levelScores, ruleLevel){
+  if(!AI_GRADING || !GRADE_URL) return null;
+  const section = function(items, store, prefix){
+    const o = {};
+    LEVELS.forEach(function(lv){ o[lv] = {correct:0, total:0, answered:0}; });
+    items.forEach(function(it,i){ const v = store[prefix+i]; o[it.level].total++; if(v!==undefined) o[it.level].answered++; if(v) o[it.level].correct++; });
+    return o;
+  };
+  const payload = {
+    objective: { mcq: section(mcq, results.mcq, 'mcq-'), listening: section(listening, results.listening, 'lst-'), rule_level: ruleLevel },
+    writing: writing.map(function(w,i){ return {level:w.level, prompt:w.prompt, answer:(results.writing['wrt-'+i]||'').slice(0,3000)}; }),
+    speaking: speaking.map(function(s,i){ return {level:s.level, prompt:s.prompt, answer:(results.transcripts['spk-'+i]||'').slice(0,3000)}; })
+  };
+  // Up to 3 tries (waiting 3 s, then 8 s between them). Only if all 3 fail does the page use the old rule.
+  const AI_TRIES = 3, AI_WAITS = [3000, 8000], AI_TIMEOUT = 45000;
+  for(let attempt=0; attempt<AI_TRIES; attempt++){
+    const ctrl = new AbortController();
+    const timer = setTimeout(function(){ ctrl.abort(); }, AI_TIMEOUT);
+    try{
+      const res = await fetch(GRADE_URL, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload), signal:ctrl.signal});
+      clearTimeout(timer);
+      if(res.ok){
+        const data = await res.json();
+        if(data && data.ok) return data;
+      } else if(res.status!==429 && res.status<500){
+        return null;   // a request the Worker refuses (400-428) will not work on a retry either
+      }
+    }catch(err){
+      clearTimeout(timer);   // network trouble or the 45-second limit: worth another try
+    }
+    console.error('AI grading try '+(attempt+1)+' of '+AI_TRIES+' failed');
+    if(attempt<AI_TRIES-1) await wait(AI_WAITS[attempt]);
+  }
+  return null;
+}
 
 // Backup copy of every result in a Google Sheet (see the setup steps).
 // Paste the "Web app" address from Google Apps Script between the quotes.
@@ -771,12 +828,13 @@ async function transcribeBlob(blob){
 async function showResults(){
   if(finished) return;
   finished = true;
+  deliveryInProgress = true;   // warn the student before closing the tab while recordings, grading and sending finish
   stopTestTimer();
   stopAnyRecordingStream();
   screenTest.classList.add('hidden');
   screenResults.classList.remove('hidden');
   document.getElementById('result-level').textContent = '…';
-  document.getElementById('result-name').textContent = 'Finishing your recordings…';
+  document.getElementById('finish-status').textContent = 'Finishing your recordings…';
   await waitForRecorder();
   await Promise.race([Promise.allSettled(pendingJobs), wait(150000)]);   // wait for transcripts still being prepared (at most 2.5 minutes)
 
@@ -805,7 +863,12 @@ async function showResults(){
     if(passed && lowerOk) finalLevel = lv;
     lowC += s.correct; lowT += s.total; prevC = s.correct;
   }
-  if(!finalLevel) finalLevel = 'A1';   // there is no level below A1
+  if(!finalLevel) finalLevel = 'A1';   // lowest level for anyone who answered something
+  // A0 only when the student answered NOTHING: no multiple choice, no listening, no writing, no speaking.
+  const answeredNothing = Object.keys(results.mcq).length===0 && Object.keys(results.listening).length===0 &&
+    !Object.values(results.writing).some(function(t){ return t && t.trim(); }) &&
+    !Object.values(results.speaking).some(Boolean) && !Object.values(results.transcripts).some(Boolean);
+  if(answeredNothing) finalLevel = 'A0';
 
   document.getElementById('result-level').textContent = finalLevel;
   document.getElementById('result-name').textContent = LEVEL_NAMES[finalLevel] || 'Below A1';
@@ -848,7 +911,35 @@ async function showResults(){
   const estLevelEl = document.getElementById('estimate-level');
   const estNoteEl = document.getElementById('estimate-note');
 
-  {
+  // ---- AI grading of the WHOLE test (Claude, through the Worker, checked twice) ----
+  if(!answeredNothing){
+    document.getElementById('finish-status').textContent = 'Saving your writing and speaking…';
+    aiResult = await aiGrade(levelScores, finalLevel);
+  }
+  const aiUsed = !!aiResult && LEVELS.indexOf(aiResult.final_level)>=0;
+
+  if(answeredNothing){
+    estLevelEl.textContent = 'A0';
+    estNoteEl.textContent = 'No answers were given in any part of the test.';
+    levelCapNote = 'A0: the student did not answer any question.';
+  } else if(aiUsed){
+    // The AI's final CEFR level is the student's level. Writing & speaking: the lower of the two AI levels.
+    const ws = [aiResult.writing_level, aiResult.speaking_level].filter(function(l){ return LEVELS.indexOf(l)>=0; });
+    estLevelEl.textContent = ws.length ? ws.sort(function(a,b){ return LEVELS.indexOf(a)-LEVELS.indexOf(b); })[0] : 'n/a';
+    const ruleLevel = finalLevel;
+    finalLevel = aiResult.final_level;
+    levelCapNote = 'Multiple choice & listening (school rule): '+ruleLevel+'. Final level by AI, '+aiResult.checks+' check'+(aiResult.checks>1?'s':'')+
+      ' ('+aiResult.check_levels+'): '+finalLevel+'. '+(aiResult.final_reason||'') +
+      (aiResult.checks>1 && !aiResult.agreed ? ' CHECKS DISAGREED: the lower level was used. Teacher, please review.' : '') +
+      (aiResult.checks<2 ? ' Only one AI check completed.' : '');
+    let capEl = document.getElementById('cap-note');
+    if(!capEl){ capEl = document.createElement('p'); capEl.id = 'cap-note'; capEl.style.cssText = 'font-size:14px;color:var(--flag);'; document.getElementById('result-desc').after(capEl); }
+    capEl.textContent = levelCapNote;
+    document.getElementById('result-level').textContent = finalLevel;
+    document.getElementById('result-name').textContent = LEVEL_NAMES[finalLevel] || '';
+    document.getElementById('result-desc').textContent = LEVEL_DESC[finalLevel] || '';
+    estNoteEl.textContent = 'Writing: '+aiResult.writing_level+' · Speaking: '+aiResult.speaking_level+' · Reading & listening: '+aiResult.reading_listening_level+'. Graded by AI (Claude).';
+  } else {
     const base = LEVELS.indexOf(finalLevel);          // -1 = below A1
     const answeredShare = answeredAll/totalTasks;     // how many of the 15 tasks were attempted
     const longShare = substantive/totalTasks;         // how many were answered at a good length
@@ -903,7 +994,7 @@ async function showResults(){
         const wrap = document.createElement('div');
         wrap.style.marginBottom='16px';
         const dlName = 'speaking-'+(i+1)+'.webm';
-        wrap.innerHTML = '<p style="margin-bottom:6px;"><strong>'+sp.prompt+'</strong></p><audio controls src="'+rec.url+'"></audio><br><a href="'+rec.url+'" download="'+dlName+'" style="font-size:13px;color:var(--accent);">Download this recording</a>'+(tr ? '<p style="font-size:13px;margin-top:6px;">Transcript: '+tr+'</p>' : '');
+        wrap.innerHTML = '<p style="margin-bottom:6px;"><strong>'+sp.prompt+'</strong></p><audio controls src="'+rec.url+'"></audio><br><a href="'+rec.url+'" download="'+dlName+'" style="font-size:13px;color:var(--accent);">Download this recording</a>'+(tr ? '<p style="font-size:13px;margin-top:6px;">Transcript: '+escapeHtml(tr)+'</p>' : '');
         box.appendChild(wrap);
       }
     });
@@ -912,7 +1003,7 @@ async function showResults(){
       if(ans){
         const wrap = document.createElement('div');
         wrap.style.marginBottom='16px';
-        wrap.innerHTML = '<p style="margin-bottom:4px;"><strong>'+w.prompt+'</strong></p><p style="color:var(--ink);">'+ans+'</p>';
+        wrap.innerHTML = '<p style="margin-bottom:4px;"><strong>'+w.prompt+'</strong></p><p style="color:var(--ink);">'+escapeHtml(ans)+'</p>';
         box.appendChild(wrap);
       }
     });
@@ -925,9 +1016,10 @@ async function showResults(){
     }
   }, {once:true});
 
-  document.getElementById('retake-btn').addEventListener('click', ()=>{ location.reload(); });
 
-  sendResultsEmail(finalLevel, levelScores, estLevelEl.textContent);
+  document.getElementById('finish-status').textContent = 'Sending your answers to the school…';
+  Promise.resolve(sendResultsEmail(finalLevel, levelScores, estLevelEl.textContent))
+    .finally(function(){ deliveryInProgress = false; document.getElementById('finish-status').hidden = true; });
 }
 
 /* ============================================================
@@ -993,6 +1085,11 @@ async function saveToSheet(record){
 
 let levelCapNote = '';
 function buildReport(objectiveLevel, levelScores, estimatedLevel){
+  const aiText = aiResult ? ('AI GRADING (Claude, '+(aiResult.model||'')+', '+aiResult.checks+' check'+(aiResult.checks>1?'s':'')+': '+aiResult.check_levels+(aiResult.checks>1 && !aiResult.agreed?' — CHECKS DISAGREED, lower level used, please review':'')+')\n' +
+    'FINAL LEVEL: '+aiResult.final_level+'   Reason: '+(aiResult.final_reason||'-')+'\n' +
+    'Reading & listening: '+aiResult.reading_listening_level+'   Writing: '+aiResult.writing_level+'   Speaking: '+aiResult.speaking_level+'\n' +
+    'Strengths: '+(aiResult.strengths||'-')+'\nWeaknesses: '+(aiResult.weaknesses||'-')+'\n' +
+    (aiResult.tasks||[]).map(function(t){ return '  '+t.id+': '+t.level+(t.note?' \u2014 '+t.note:''); }).join('\n')+'\n') : 'AI GRADING: not available (count-based estimate used)\n';
   let breakdownText = '';
   LEVELS.forEach(function(lv){
     const sc = levelScores[lv];
@@ -1028,7 +1125,7 @@ function buildReport(objectiveLevel, levelScores, estimatedLevel){
     email: studentEmail || RESULTS_EMAIL,
     objective_level: objectiveLevel,
     estimated_level: estimatedLevel,
-    breakdown: breakdownText,
+    breakdown: breakdownText + '\n' + aiText,
     writing_answers: writingText || '(none answered)',
     speaking_answers: speakingText || '(none recorded)',
     taken_at: new Date().toLocaleString(),
@@ -1047,7 +1144,7 @@ function buildReport(objectiveLevel, levelScores, estimatedLevel){
   const scoreLine = LEVELS.map(function(lv){ return lv+' '+levelScores[lv].correct+'/'+levelScores[lv].total; }).join('   ');
   const levelScript =
     'Level: '+objectiveLevel+'   (writing & speaking estimate: '+estimatedLevel+')\n' +
-    'Scores: '+scoreLine+'\n'+(levelCapNote ? levelCapNote+'\n' : '')+'\n' +
+    'Scores: '+scoreLine+'\n'+(levelCapNote ? levelCapNote+'\n' : '')+'\n' + aiText + '\n' +
     'WRITING\n'+(writingText || '(none answered)\n')+'\n' +
     'SPEAKING\n'+(speakingText || '(none recorded)\n');
 
@@ -1057,6 +1154,10 @@ function buildReport(objectiveLevel, levelScores, estimatedLevel){
     email: studentEmail, phone: studentPhone, job: studentJob, parent_name: parentName,
     level_script: levelScript,
     objective_level: objectiveLevel, estimated_level: estimatedLevel,
+    ai_writing_level: aiResult ? aiResult.writing_level : 'n/a',
+    ai_speaking_level: aiResult ? aiResult.speaking_level : 'n/a',
+    ai_feedback: aiResult ? ((aiResult.checks>1 && !aiResult.agreed ? 'CHECKS DISAGREED ('+aiResult.check_levels+'), please review | ' : 'Checks: '+aiResult.check_levels+' | ') +
+      'Strengths: '+(aiResult.strengths||'-')+' | Weaknesses: '+(aiResult.weaknesses||'-')) : '',
     speaking_recorded: String(recordedCount),
     taken_at: new Date().toISOString(),
     device: (navigator.userAgent || '').slice(0,200)
@@ -1068,8 +1169,7 @@ function buildReport(objectiveLevel, levelScores, estimatedLevel){
     '==================================================\n' +
     'Name: '+(studentName||'')+'\nPhone: '+(studentPhone||'')+'\nEmail: '+(studentEmail||'')+'\n' +
     'Job / Class: '+(studentJob||'')+'\nParent name: '+(parentName||'')+'\nDate: '+params.taken_at+'\nReference: '+id+'\n\n' +
-    'Objective level: '+objectiveLevel+'\nEstimated writing & speaking level: '+estimatedLevel+'\n\n' +
-    'Score by level:\n'+breakdownText+'\n' +
+    'Your level will be given to you by your teacher.\n\n' +
     'Writing answers:\n'+(writingText||'(none answered)\n')+'\n' +
     'Speaking answers:\n'+(speakingText||'(none recorded)\n');
 
@@ -1097,7 +1197,7 @@ function getDeliveryBox(){
   box.innerHTML =
     '<p id="email-status" style="font-size:14px;margin-bottom:4px;color:var(--ink);"></p>' +
     '<p id="delivery-detail" style="font-size:12px;margin-bottom:12px;"></p>' +
-    '<button class="btn-outline hidden" id="download-btn" style="min-height:44px;padding:10px 18px;font-size:14px;">Download a copy of my results</button>';
+    '<button class="btn-outline hidden" id="download-btn" style="min-height:44px;padding:10px 18px;font-size:14px;">Download a copy of my answers</button>';
   document.getElementById('ws-summary').after(box);
   return box;
 }
