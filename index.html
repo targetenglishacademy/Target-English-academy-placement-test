@@ -9,7 +9,6 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <style>
   :root{
     --paper:#FBFAF7;
@@ -188,31 +187,18 @@
 
   <section id="screen-results" class="hidden">
     <p class="section-tag">Test complete</p>
-    <h2 style="margin-bottom:10px;">Thank you!</h2>
-    <p id="finish-status">Finishing your recordings…</p>
-    <p style="font-size:14px;">Your answers have been sent to Target English Academy. Your teacher will contact you with your level.</p>
-
-    <!-- The level is never shown to the student: this panel stays hidden. It is only filled for the email and the sheet. -->
-    <div id="level-panel" hidden aria-hidden="true">
-    <p class="section-tag">Objective result</p>
-    <div class="result-level" id="result-level">B1</div>
-    <div class="result-name" id="result-name">Intermediate</div>
-    <p id="result-desc"></p>
-    <p style="font-size:13px;">Based on the 45 scored grammar, reading, vocabulary and listening items.</p>
-
-    <hr class="rule">
-    <h3>Score by level</h3>
-    <div id="breakdown"></div>
-
-    <hr class="rule">
-    <p class="section-tag">Estimated result</p>
-    <h3 style="margin-bottom:14px;">Writing &amp; speaking</h3>
-    <div class="estimate-card">
-      <div class="estimate-level" id="estimate-level">—</div>
-      <div class="estimate-note" id="estimate-note"></div>
+    <h2 style="margin-bottom:10px;">Thank you! / Teşekkürler!</h2>
+    <p id="finish-status" style="font-size:16px;font-weight:600;color:var(--flag);">Please do not close this page. / Lütfen bu sayfayı kapatmayın.</p>
+    <div id="finish-done" hidden>
+      <p style="font-size:16px;font-weight:600;">Your test has been received ✓ You can close this page now.</p>
+      <p style="font-size:16px;font-weight:600;">Sınavınız alındı ✓ Bu sayfayı artık kapatabilirsiniz.</p>
+      <p style="font-size:14px;">Your teacher will contact you with your level. / Seviyeniz öğretmeniniz tarafından size bildirilecektir.</p>
     </div>
+    <div id="finish-failed" hidden>
+      <p style="font-size:15px;color:var(--flag);">We could not send your test automatically. Please download your answers and send the file to the academy.<br>Sınavınız otomatik olarak gönderilemedi. Lütfen cevaplarınızı indirip dosyayı akademiye gönderin.</p>
+      <button class="btn-outline" id="download-btn" style="min-height:44px;padding:10px 18px;font-size:14px;">Download my answers / Cevaplarımı indir</button>
     </div>
-    <p id="ws-summary"></p>
+    <p id="ws-summary" style="margin-top:16px;"></p>
 
     <div class="btn-row">
       <div class="spacer"></div>
@@ -302,81 +288,20 @@ const speaking = [
 ];
 
 /* ============================================================
-   EMAIL SETTINGS — fill these in after you create your free
-   EmailJS account (see the instructions your teacher gave you).
-   Leave EMAILJS_SERVICE_ID blank to disable emailing results.
+   The page only talks to the school's Cloudflare Worker.
+   Keys, the school's email address and the results sheet live there,
+   never on this public page.
 ============================================================ */
-const EMAILJS_SERVICE_ID = 'service_spaqg7s';
-const EMAILJS_TEMPLATE_ID = 'template_cdbd604';
-const EMAILJS_PUBLIC_KEY = '16IW5GFRrAAKvoApT';
-const RESULTS_EMAIL = 'targetacademyenglish@gmail.com';
-
-// Address of your Cloudflare Worker (the "middleman" that transcribes speaking recordings).
-// Paste it between the quotes, e.g. 'https://target-transcribe.yourname.workers.dev'
-// Leave it empty to keep using the browser's built-in (less reliable) transcript.
+// Address of your Cloudflare Worker.
 const TRANSCRIBE_URL = 'https://damp-rice-b8d0.sarah-ak0306.workers.dev';
+const SUBMIT_URL = TRANSCRIBE_URL.replace(/\/+$/,'') + '/submit';
 const pendingJobs = [];
-
-// AI grading of writing & speaking runs on the same Worker (the AI key lives only there).
-// Leave AI_GRADING off (false) to go back to the old count-based estimate.
-const AI_GRADING = true;
-const GRADE_URL = TRANSCRIBE_URL ? TRANSCRIBE_URL.replace(/\/+$/,'') + '/grade' : '';
 
 // Show student text safely on the page (never as HTML).
 function escapeHtml(s){
   return String(s==null?'':s).replace(/[&<>"']/g, function(c){
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
   });
-}
-
-// Ask the Worker for CEFR levels. Returns null if anything goes wrong; the page then uses the old estimate.
-let aiResult = null;
-async function aiGrade(levelScores, ruleLevel){
-  if(!AI_GRADING || !GRADE_URL) return null;
-  const section = function(items, store, prefix){
-    const o = {};
-    LEVELS.forEach(function(lv){ o[lv] = {correct:0, total:0, answered:0}; });
-    items.forEach(function(it,i){ const v = store[prefix+i]; o[it.level].total++; if(v!==undefined) o[it.level].answered++; if(v) o[it.level].correct++; });
-    return o;
-  };
-  const payload = {
-    objective: { mcq: section(mcq, results.mcq, 'mcq-'), listening: section(listening, results.listening, 'lst-'), rule_level: ruleLevel },
-    writing: writing.map(function(w,i){ return {level:w.level, prompt:w.prompt, answer:(results.writing['wrt-'+i]||'').slice(0,3000)}; }),
-    speaking: speaking.map(function(s,i){ return {level:s.level, prompt:s.prompt, answer:(results.transcripts['spk-'+i]||'').slice(0,3000)}; })
-  };
-  // Up to 3 tries (waiting 3 s, then 8 s between them). Only if all 3 fail does the page use the old rule.
-  const AI_TRIES = 3, AI_WAITS = [3000, 8000], AI_TIMEOUT = 45000;
-  for(let attempt=0; attempt<AI_TRIES; attempt++){
-    const ctrl = new AbortController();
-    const timer = setTimeout(function(){ ctrl.abort(); }, AI_TIMEOUT);
-    try{
-      const res = await fetch(GRADE_URL, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload), signal:ctrl.signal});
-      clearTimeout(timer);
-      if(res.ok){
-        const data = await res.json();
-        if(data && data.ok) return data;
-      } else if(res.status!==429 && res.status<500){
-        return null;   // a request the Worker refuses (400-428) will not work on a retry either
-      }
-    }catch(err){
-      clearTimeout(timer);   // network trouble or the 45-second limit: worth another try
-    }
-    console.error('AI grading try '+(attempt+1)+' of '+AI_TRIES+' failed');
-    if(attempt<AI_TRIES-1) await wait(AI_WAITS[attempt]);
-  }
-  return null;
-}
-
-// Backup copy of every result in a Google Sheet (see the setup steps).
-// Paste the "Web app" address from Google Apps Script between the quotes.
-// Leave it empty to switch the sheet backup off.
-const SHEET_URL = 'https://script.google.com/macros/s/AKfycbzo3TbIQPEVwFBnnE7HwKlm1j8oUCxckdBfFNBp0l-QMxiPytR-2Zn9pd87tiamsSI5/exec';
-const SHEET_TOKEN = 'tea-0e3c65d1adf97090ef75';
-
-if(!window.emailjs){
-  console.error('EmailJS library did not load (blocked by an ad blocker, firewall or offline?). Results cannot be emailed.');
-} else if(EMAILJS_PUBLIC_KEY && EMAILJS_PUBLIC_KEY !== 'YOUR_PUBLIC_KEY'){
-  emailjs.init({publicKey: EMAILJS_PUBLIC_KEY});
 }
 
 const LEVELS = ['A1','A2','B1','B2','C1'];
@@ -823,207 +748,9 @@ async function transcribeBlob(blob){
 }
 
 /* ============================================================
-   SCORING
-============================================================ */
-async function showResults(){
-  if(finished) return;
-  finished = true;
-  deliveryInProgress = true;   // warn the student before closing the tab while recordings, grading and sending finish
-  stopTestTimer();
-  stopAnyRecordingStream();
-  screenTest.classList.add('hidden');
-  screenResults.classList.remove('hidden');
-  document.getElementById('result-level').textContent = '…';
-  document.getElementById('finish-status').textContent = 'Finishing your recordings…';
-  await waitForRecorder();
-  await Promise.race([Promise.allSettled(pendingJobs), wait(150000)]);   // wait for transcripts still being prepared (at most 2.5 minutes)
-
-  // Objective score: combine 35 mcq + 10 listening items, grouped by level (7+2=9 per level)
-  const levelScores = {};
-  LEVELS.forEach(lv=>{ levelScores[lv] = {correct:0,total:0}; });
-  mcq.forEach((item,i)=>{
-    levelScores[item.level].total++;
-    if(results.mcq['mcq-'+i]) levelScores[item.level].correct++;
-  });
-  listening.forEach((item,i)=>{
-    levelScores[item.level].total++;
-    if(results.listening['lst-'+i]) levelScores[item.level].correct++;
-  });
-
-  // The level is the HIGHEST one where the student got just over half right (5 of 9).
-  // A weak spot on a lower level does not hold them back (a few wrong answers or lucky guesses are normal);
-  // the only safeguard is that the levels below must add up to at least 45% correct, so a few lucky guesses
-  // on a hard level cannot lift someone who got the easy questions wrong.
-  let finalLevel = null, lowC = 0, lowT = 0, prevC = 0;
-  for(const lv of LEVELS){
-    const s = levelScores[lv];
-    const need = (lv==='B1') ? 4 : (lv==='B2' || lv==='C1') ? Math.ceil(s.total*0.7) : Math.ceil(s.total*5/9);   // A1, A2: 5 of 9 · B1: 4 of 9 · B2, C1: 7 of 9 (70%)
-    const passed = s.correct >= need;
-    const lowerOk = lowT===0 || (lowC/lowT >= 0.45 && prevC >= 4);   // and the level just below must be at least 4 of 9
-    if(passed && lowerOk) finalLevel = lv;
-    lowC += s.correct; lowT += s.total; prevC = s.correct;
-  }
-  if(!finalLevel) finalLevel = 'A1';   // lowest level for anyone who answered something
-  // A0 only when the student answered NOTHING: no multiple choice, no listening, no writing, no speaking.
-  const answeredNothing = Object.keys(results.mcq).length===0 && Object.keys(results.listening).length===0 &&
-    !Object.values(results.writing).some(function(t){ return t && t.trim(); }) &&
-    !Object.values(results.speaking).some(Boolean) && !Object.values(results.transcripts).some(Boolean);
-  if(answeredNothing) finalLevel = 'A0';
-
-  document.getElementById('result-level').textContent = finalLevel;
-  document.getElementById('result-name').textContent = LEVEL_NAMES[finalLevel] || 'Below A1';
-  document.getElementById('result-desc').textContent = LEVEL_DESC[finalLevel] || 'Keep practicing the basics \u2014 you\u2019re building your foundation.';
-
-  const breakdown = document.getElementById('breakdown');
-  breakdown.innerHTML = '';
-  LEVELS.forEach(lv=>{
-    const s = levelScores[lv];
-    const pct = Math.round((s.correct/s.total)*100);
-    const row = document.createElement('div');
-    row.className = 'breakdown-row';
-    row.innerHTML = '<span class="lvl">'+lv+'</span><span class="bar-track"><span class="bar-fill" style="width:'+pct+'%"></span></span><span class="sc">'+s.correct+'/'+s.total+'</span>';
-    breakdown.appendChild(row);
-  });
-
-  // Estimated writing & speaking level. Anchored to the objective (reading/listening) level:
-  // students who answer most writing + speaking tasks at a reasonable length get that level or "Upper" of it.
-  const writingTexts = writing.map((w,i)=>results.writing['wrt-'+i]||'');
-  const substantiveWriting = writingTexts.filter(t=>t.trim().split(/\s+/).filter(Boolean).length>=12).length;
-  const answeredWriting = writingTexts.filter(t=>t.trim().length>0).length;
-  let speakingFromTranscript = 0, speakingFromDuration = 0, answeredSpeaking = 0, substantiveSpeaking = 0;
-  const speakingQuality = [];
-  speaking.forEach((s,i)=>{
-    const t = (results.transcripts['spk-'+i]||'').trim();
-    const rec = results.speaking['spk-'+i];
-    const dur = rec && rec.duration ? rec.duration : 0;
-    const words = t ? t.split(/\s+/).filter(Boolean).length : 0;
-    if(rec || words>0) answeredSpeaking++;
-    if(words>0) speakingFromTranscript++; else if(rec && dur>=3) speakingFromDuration++;
-    if(words>=18 || (words===0 && dur>=15)) substantiveSpeaking++;
-    if(words>0) speakingQuality.push(analyzeSpoken(t));
-  });
-  const writingQuality = writingTexts.filter(t=>t.trim()).map(analyzeWritten).filter(v=>v!==null);
-  const allQuality = [...writingQuality, ...speakingQuality];
-  const totalTasks = writing.length + speaking.length;
-  const substantive = substantiveWriting + substantiveSpeaking;
-  const answeredAll = answeredWriting + answeredSpeaking;
-  const share = substantive/totalTasks;
-  const estLevelEl = document.getElementById('estimate-level');
-  const estNoteEl = document.getElementById('estimate-note');
-
-  // ---- AI grading of the WHOLE test (Claude, through the Worker, checked twice) ----
-  if(!answeredNothing){
-    document.getElementById('finish-status').textContent = 'Saving your writing and speaking…';
-    aiResult = await aiGrade(levelScores, finalLevel);
-  }
-  const aiUsed = !!aiResult && LEVELS.indexOf(aiResult.final_level)>=0;
-
-  if(answeredNothing){
-    estLevelEl.textContent = 'A0';
-    estNoteEl.textContent = 'No answers were given in any part of the test.';
-    levelCapNote = 'A0: the student did not answer any question.';
-  } else if(aiUsed){
-    // The AI's final CEFR level is the student's level. Writing & speaking: the lower of the two AI levels.
-    const ws = [aiResult.writing_level, aiResult.speaking_level].filter(function(l){ return LEVELS.indexOf(l)>=0; });
-    estLevelEl.textContent = ws.length ? ws.sort(function(a,b){ return LEVELS.indexOf(a)-LEVELS.indexOf(b); })[0] : 'n/a';
-    const ruleLevel = finalLevel;
-    finalLevel = aiResult.final_level;
-    levelCapNote = 'Multiple choice & listening (school rule): '+ruleLevel+'. Final level by AI, '+aiResult.checks+' check'+(aiResult.checks>1?'s':'')+
-      ' ('+aiResult.check_levels+'): '+finalLevel+'. '+(aiResult.final_reason||'') +
-      (aiResult.checks>1 && !aiResult.agreed ? ' CHECKS DISAGREED: the lower level was used. Teacher, please review.' : '') +
-      (aiResult.checks<2 ? ' Only one AI check completed.' : '');
-    let capEl = document.getElementById('cap-note');
-    if(!capEl){ capEl = document.createElement('p'); capEl.id = 'cap-note'; capEl.style.cssText = 'font-size:14px;color:var(--flag);'; document.getElementById('result-desc').after(capEl); }
-    capEl.textContent = levelCapNote;
-    document.getElementById('result-level').textContent = finalLevel;
-    document.getElementById('result-name').textContent = LEVEL_NAMES[finalLevel] || '';
-    document.getElementById('result-desc').textContent = LEVEL_DESC[finalLevel] || '';
-    estNoteEl.textContent = 'Writing: '+aiResult.writing_level+' · Speaking: '+aiResult.speaking_level+' · Reading & listening: '+aiResult.reading_listening_level+'. Graded by AI (Claude).';
-  } else {
-    const base = LEVELS.indexOf(finalLevel);          // -1 = below A1
-    const answeredShare = answeredAll/totalTasks;     // how many of the 15 tasks were attempted
-    const longShare = substantive/totalTasks;         // how many were answered at a good length
-    let label, dropped = false;
-    const hard = base>=3;                             // B2 and C1 have to be earned with writing & speaking too
-    if(answeredShare>=0.67 && !(hard && longShare<0.5)){
-      // Answered most tasks: same level as reading/listening.
-      label = LEVELS[base];
-    } else if(answeredShare>=0.3 && !hard){
-      label = base>=1 ? LEVELS[base-1] : 'A1';        // answered only some tasks: one level down (no "Lower"/"Upper" labels)
-    } else {
-      label = base>=1 ? LEVELS[base-1] : 'A1';        // answered few or none (or B2/C1 without enough writing & speaking): one level down
-      dropped = true;                                 // this one also lowers the overall level
-    }
-    estLevelEl.textContent = label;
-    // Writing and speaking count too: if the student barely answered them, the overall level is held at the
-    // writing & speaking level instead of the reading & listening level alone.
-    const readingLevel = finalLevel;
-    const estWhole = LEVELS.indexOf(label);
-    if(base>=0 && dropped && estWhole < base){
-      const rawLevel = finalLevel;
-      finalLevel = estWhole<0 ? 'A1' : LEVELS[estWhole];
-      let why;
-      if(answeredAll===0) why = 'no writing or speaking answers were given';
-      else if(answeredShare<0.3) why = 'only '+answeredAll+' of '+totalTasks+' writing and speaking tasks were answered';
-      else why = 'B2 and C1 need most writing and speaking tasks answered at a good length ('+answeredAll+' of '+totalTasks+' answered, '+substantive+' at a good length)';
-      levelCapNote = 'Reading & listening alone: '+rawLevel+'. Overall level lowered to '+finalLevel+' because '+why+'.';
-      let capEl = document.getElementById('cap-note');
-      if(!capEl){ capEl = document.createElement('p'); capEl.id = 'cap-note'; capEl.style.cssText = 'font-size:14px;color:var(--flag);'; document.getElementById('result-desc').after(capEl); }
-      capEl.textContent = levelCapNote;
-      document.getElementById('result-level').textContent = finalLevel;
-      document.getElementById('result-name').textContent = LEVEL_NAMES[finalLevel] || 'Below A1';
-      document.getElementById('result-desc').textContent = LEVEL_DESC[finalLevel] || 'Keep practicing the basics \u2014 you\u2019re building your foundation.';
-    }
-    estNoteEl.textContent = 'Estimated from the reading & listening level ('+readingLevel+') and how much of the writing and speaking the student completed: '+answeredAll+' of '+totalTasks+' tasks answered, '+substantive+' at a good length \u2014 not AI-graded.';
-  }
-
-  const speakingDone = Object.values(results.speaking).filter(Boolean).length;
-  const writingDone = Object.values(results.writing).filter(v=>v && v.length>0).length;
-  document.getElementById('ws-summary').textContent =
-    'Writing: '+writingDone+'/'+writing.length+' answered. Speaking: '+speakingDone+'/'+speaking.length+' recorded'+((SpeechRecognitionCtor || TRANSCRIBE_URL) ? ' (with transcript)' : ' (live transcript isn\u2019t available on this browser \u2014 recordings still work and can be reviewed by ear)')+'.';
-
-  document.getElementById('review-btn').addEventListener('click', ()=>{
-    const box = document.getElementById('recordings-review');
-    box.classList.toggle('hidden');
-    if(box.classList.contains('hidden')) return;
-    box.innerHTML = '';
-    speaking.forEach((sp,i)=>{
-      const rec = results.speaking['spk-'+i];
-      const tr = results.transcripts['spk-'+i];
-      if(rec){
-        const wrap = document.createElement('div');
-        wrap.style.marginBottom='16px';
-        const dlName = 'speaking-'+(i+1)+'.webm';
-        wrap.innerHTML = '<p style="margin-bottom:6px;"><strong>'+sp.prompt+'</strong></p><audio controls src="'+rec.url+'"></audio><br><a href="'+rec.url+'" download="'+dlName+'" style="font-size:13px;color:var(--accent);">Download this recording</a>'+(tr ? '<p style="font-size:13px;margin-top:6px;">Transcript: '+escapeHtml(tr)+'</p>' : '');
-        box.appendChild(wrap);
-      }
-    });
-    writing.forEach((w,i)=>{
-      const ans = results.writing['wrt-'+i];
-      if(ans){
-        const wrap = document.createElement('div');
-        wrap.style.marginBottom='16px';
-        wrap.innerHTML = '<p style="margin-bottom:4px;"><strong>'+w.prompt+'</strong></p><p style="color:var(--ink);">'+escapeHtml(ans)+'</p>';
-        box.appendChild(wrap);
-      }
-    });
-    const hasRecordings = speaking.some((sp,i)=>results.speaking['spk-'+i]);
-    if(hasRecordings){
-      const note = document.createElement('p');
-      note.style.fontSize='13px';
-      note.innerHTML = 'Recordings aren\u2019t attached to the results email automatically \u2014 please download and send them separately if your teacher needs to hear them.';
-      box.insertBefore(note, box.firstChild);
-    }
-  }, {once:true});
-
-
-  document.getElementById('finish-status').textContent = 'Sending your answers to the school…';
-  Promise.resolve(sendResultsEmail(finalLevel, levelScores, estLevelEl.textContent))
-    .finally(function(){ deliveryInProgress = false; document.getElementById('finish-status').hidden = true; });
-}
-
-/* ============================================================
-   DELIVERING RESULTS — email + Google Sheet backup + download file
+   FINISHING — the test is sent ONCE to the school's Worker.
+   The Worker works out the level, emails the school and saves the
+   sheet row on its own. The level never comes back to this page.
 ============================================================ */
 let deliveryInProgress = false;
 window.addEventListener('beforeunload', function(e){
@@ -1061,119 +788,56 @@ function newSubmissionId(){
   return 'id-'+Date.now()+'-'+Math.random().toString(36).slice(2,10);
 }
 
-async function saveToSheet(record){
-  const body = JSON.stringify(Object.assign({token: SHEET_TOKEN}, record));
-  let res;
-  try{
-    res = await fetch(SHEET_URL, {method:'POST', body: body});
-  }catch(netErr){
-    // Either the network is down, or the browser would not let us read the answer.
-    // Send one more copy we do not read; the sheet ignores a repeat of the same id.
-    await fetch(SHEET_URL, {method:'POST', mode:'no-cors', body: body});
-    return 'sent';
-  }
-  if(!res.ok){ const e = new Error('Sheet service returned '+res.status); e.status = res.status; throw e; }
-  let data;
-  try{ data = await res.json(); }catch(e2){ return 'sent'; }
-  if(!data.ok){
-    const e3 = new Error(data.error || 'Sheet rejected the result');
-    e3.status = (data.error==='busy, try again') ? 503 : 400;
-    throw e3;
-  }
-  return 'saved';
+function collectSubmission(id){
+  return {
+    id: id,
+    consent: !!(consentBox && consentBox.checked),
+    student: { name: studentName, phone: studentPhone, email: studentEmail, job: studentJob, parent_name: parentName },
+    device: (navigator.userAgent || '').slice(0,200),
+    mcq: mcq.map(function(it,i){ const v = results.mcq['mcq-'+i]; return {level: it.level, answered: v!==undefined, correct: v===true}; }),
+    listening: listening.map(function(it,i){ const v = results.listening['lst-'+i]; return {level: it.level, answered: v!==undefined, correct: v===true}; }),
+    writing: writing.map(function(w,i){ return {level: w.level, prompt: w.prompt, answer: (results.writing['wrt-'+i]||'').slice(0,3000)}; }),
+    speaking: speaking.map(function(sp,i){
+      const rec = results.speaking['spk-'+i];
+      return {level: sp.level, prompt: sp.prompt, transcript: (results.transcripts['spk-'+i]||'').slice(0,3000),
+              recorded: !!rec, duration: rec && rec.duration ? rec.duration : 0, error: results.transcriptErrors['spk-'+i] || ''};
+    })
+  };
 }
 
-let levelCapNote = '';
-function buildReport(objectiveLevel, levelScores, estimatedLevel){
-  const aiText = aiResult ? ('AI GRADING (Claude, '+(aiResult.model||'')+', '+aiResult.checks+' check'+(aiResult.checks>1?'s':'')+': '+aiResult.check_levels+(aiResult.checks>1 && !aiResult.agreed?' — CHECKS DISAGREED, lower level used, please review':'')+')\n' +
-    'FINAL LEVEL: '+aiResult.final_level+'   Reason: '+(aiResult.final_reason||'-')+'\n' +
-    'Reading & listening: '+aiResult.reading_listening_level+'   Writing: '+aiResult.writing_level+'   Speaking: '+aiResult.speaking_level+'\n' +
-    'Strengths: '+(aiResult.strengths||'-')+'\nWeaknesses: '+(aiResult.weaknesses||'-')+'\n' +
-    (aiResult.tasks||[]).map(function(t){ return '  '+t.id+': '+t.level+(t.note?' \u2014 '+t.note:''); }).join('\n')+'\n') : 'AI GRADING: not available (count-based estimate used)\n';
-  let breakdownText = '';
-  LEVELS.forEach(function(lv){
-    const sc = levelScores[lv];
-    breakdownText += lv+': '+sc.correct+'/'+sc.total+'\n';
-  });
-  if(levelCapNote) breakdownText += levelCapNote+'\n';
-
-  let writingText = '';
-  writing.forEach(function(w,i){
-    const ans = results.writing['wrt-'+i];
-    if(ans) writingText += '• '+w.prompt+'\n  '+ans+'\n\n';
-  });
-
-  let speakingText = '';
-  let recordedCount = 0;
-  speaking.forEach(function(sp,i){
-    const tr = results.transcripts['spk-'+i];
-    const done = results.speaking['spk-'+i];
-    if(done){
-      recordedCount++;
-      speakingText += '• '+sp.prompt+'\n  '+(tr ? 'Transcript: '+tr : '(recorded for '+(done.duration||0)+' seconds — no transcript available'+(results.transcriptErrors['spk-'+i] ? ': '+results.transcriptErrors['spk-'+i] : '')+'; audio not attached)')+'\n\n';
+// Up to 3 tries (waiting 2 s, then 5 s). The same id is sent each time, so the school never gets it twice.
+async function submitTest(submission){
+  const body = JSON.stringify(submission);
+  const waits = [2000, 5000];
+  for(let attempt=0; attempt<3; attempt++){
+    const ctrl = new AbortController();
+    const timer = setTimeout(function(){ ctrl.abort(); }, 30000);
+    try{
+      const res = await fetch(SUBMIT_URL, {method:'POST', headers:{'Content-Type':'application/json'}, body: body, signal: ctrl.signal, keepalive: body.length < 60000});
+      clearTimeout(timer);
+      if(res.ok){ const data = await res.json(); if(data && data.received) return true; }
+      else if(res.status!==429 && res.status<500){ console.error('Submit refused', res.status); return false; }
+    }catch(err){
+      clearTimeout(timer);
+      console.error('Submit try '+(attempt+1)+' failed:', describeError(err));
     }
-  });
+    if(attempt<2) await wait(waits[attempt]);
+  }
+  return false;
+}
 
-  const id = newSubmissionId();
-  const params = {
-    to_email: RESULTS_EMAIL,
-    name: studentName || '(no name entered)',
-    parent_name: parentName || '(not provided)',
-    student_job: studentJob || '(not provided)',
-    student_phone: studentPhone || '(not provided)',
-    student_email: studentEmail || '(not provided)',
-    email: studentEmail || RESULTS_EMAIL,
-    objective_level: objectiveLevel,
-    estimated_level: estimatedLevel,
-    breakdown: breakdownText + '\n' + aiText,
-    writing_answers: writingText || '(none answered)',
-    speaking_answers: speakingText || '(none recorded)',
-    taken_at: new Date().toLocaleString(),
-    submission_id: id
-  };
-
-  const clip = function(t, n){ return t.length>n ? t.slice(0,n)+'\n… (shortened; the full text is in the results sheet)' : t; };
-  params.writing_answers = clip(params.writing_answers, 12000);
-  params.speaking_answers = clip(params.speaking_answers, 12000);
-  const paramsShort = Object.assign({}, params, {writing_answers:'(too long to send by email — see the results sheet)', speaking_answers:'(too long to send by email — see the results sheet)'});
-
-  // The form has one "Adı Soyadı" box, so split it: last word = last name, the rest = first name.
-  const nameParts = (studentName || '').trim().split(/\s+/).filter(Boolean);
-  const lastName = nameParts.length > 1 ? nameParts[nameParts.length-1] : '';
-  const firstName = nameParts.length > 1 ? nameParts.slice(0,-1).join(' ') : (nameParts[0] || '');
-  const scoreLine = LEVELS.map(function(lv){ return lv+' '+levelScores[lv].correct+'/'+levelScores[lv].total; }).join('   ');
-  const levelScript =
-    'Level: '+objectiveLevel+'   (writing & speaking estimate: '+estimatedLevel+')\n' +
-    'Scores: '+scoreLine+'\n'+(levelCapNote ? levelCapNote+'\n' : '')+'\n' + aiText + '\n' +
-    'WRITING\n'+(writingText || '(none answered)\n')+'\n' +
-    'SPEAKING\n'+(speakingText || '(none recorded)\n');
-
-  const record = {
-    id: id,
-    name: studentName,
-    email: studentEmail, phone: studentPhone, job: studentJob, parent_name: parentName,
-    level_script: levelScript,
-    objective_level: objectiveLevel, estimated_level: estimatedLevel,
-    ai_writing_level: aiResult ? aiResult.writing_level : 'n/a',
-    ai_speaking_level: aiResult ? aiResult.speaking_level : 'n/a',
-    ai_feedback: aiResult ? ((aiResult.checks>1 && !aiResult.agreed ? 'CHECKS DISAGREED ('+aiResult.check_levels+'), please review | ' : 'Checks: '+aiResult.check_levels+' | ') +
-      'Strengths: '+(aiResult.strengths||'-')+' | Weaknesses: '+(aiResult.weaknesses||'-')) : '',
-    speaking_recorded: String(recordedCount),
-    taken_at: new Date().toISOString(),
-    device: (navigator.userAgent || '').slice(0,200)
-  };
-  LEVELS.forEach(function(lv){ record['score_'+lv] = levelScores[lv].correct+'/'+levelScores[lv].total; });
-
-  const fileText =
-    'Target English Academy — Placement Test Result\n' +
-    '==================================================\n' +
-    'Name: '+(studentName||'')+'\nPhone: '+(studentPhone||'')+'\nEmail: '+(studentEmail||'')+'\n' +
-    'Job / Class: '+(studentJob||'')+'\nParent name: '+(parentName||'')+'\nDate: '+params.taken_at+'\nReference: '+id+'\n\n' +
-    'Your level will be given to you by your teacher.\n\n' +
-    'Writing answers:\n'+(writingText||'(none answered)\n')+'\n' +
-    'Speaking answers:\n'+(speakingText||'(none recorded)\n');
-
-  return {params:params, paramsShort:paramsShort, record:record, fileText:fileText};
+// The student's own copy: their answers only, never a level.
+function answersFileText(sub){
+  const st = sub.student;
+  let t = 'Target English Academy — Placement Test (your answers)\n==================================================\n' +
+    'Name: '+st.name+'\nPhone: '+st.phone+'\nEmail: '+st.email+'\nJob / Class: '+st.job+'\nParent name: '+st.parent_name+'\n' +
+    'Date: '+new Date().toLocaleString()+'\nReference: '+sub.id+'\n\nYour level will be given to you by your teacher.\n\n' +
+    'Multiple choice answered: '+sub.mcq.filter(function(x){return x.answered;}).length+' of '+sub.mcq.length+
+    ' · Listening answered: '+sub.listening.filter(function(x){return x.answered;}).length+' of '+sub.listening.length+'\n\nWriting answers:\n';
+  sub.writing.forEach(function(w){ if(w.answer) t += '• '+w.prompt+'\n  '+w.answer+'\n\n'; });
+  t += '\nSpeaking answers:\n';
+  sub.speaking.forEach(function(sp){ if(sp.recorded || sp.transcript) t += '• '+sp.prompt+'\n  '+(sp.transcript ? 'Transcript: '+sp.transcript : '(recorded, no transcript)')+'\n\n'; });
+  return t;
 }
 
 function downloadResultFile(text){
@@ -1181,91 +845,68 @@ function downloadResultFile(text){
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   const safe = (studentName||'student').replace(/[^a-zA-Z0-9À-ɏ]+/g,'-').slice(0,40);
-  a.href = url;
-  a.download = 'placement-result-'+safe+'.txt';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+  a.href = url; a.download = 'placement-answers-'+safe+'.txt';
+  document.body.appendChild(a); a.click(); a.remove();
   setTimeout(function(){ URL.revokeObjectURL(url); }, 5000);
 }
 
-function getDeliveryBox(){
-  let box = document.getElementById('delivery-box');
-  if(box) return box;
-  box = document.createElement('div');
-  box.id = 'delivery-box';
-  box.innerHTML =
-    '<p id="email-status" style="font-size:14px;margin-bottom:4px;color:var(--ink);"></p>' +
-    '<p id="delivery-detail" style="font-size:12px;margin-bottom:12px;"></p>' +
-    '<button class="btn-outline hidden" id="download-btn" style="min-height:44px;padding:10px 18px;font-size:14px;">Download a copy of my answers</button>';
-  document.getElementById('ws-summary').after(box);
-  return box;
-}
+async function showResults(){
+  if(finished) return;
+  finished = true;
+  deliveryInProgress = true;   // warn before closing until the school has received the test
+  stopTestTimer();
+  stopAnyRecordingStream();
+  screenTest.classList.add('hidden');
+  screenResults.classList.remove('hidden');
+  const status = document.getElementById('finish-status');
+  const done = document.getElementById('finish-done');
+  const failBox = document.getElementById('finish-failed');
+  status.textContent = 'Uploading your last recording… Please do not close this page. / Son kaydınız yükleniyor… Lütfen bu sayfayı kapatmayın.';
 
-async function sendResultsEmail(objectiveLevel, levelScores, estimatedLevel){
-  getDeliveryBox();
-  const status = document.getElementById('email-status');
-  const detail = document.getElementById('delivery-detail');
-  const dlBtn = document.getElementById('download-btn');
-  status.textContent = 'Sending your results…';
+  await waitForRecorder();
+  await Promise.race([Promise.allSettled(pendingJobs), wait(150000)]);   // last transcripts (at most 2.5 minutes)
 
-  let report;
-  try{
-    report = buildReport(objectiveLevel, levelScores, estimatedLevel);
-  }catch(err){
-    console.error('Could not build the report:', err);
-    status.textContent = 'Something went wrong preparing your results. Please tell your teacher.';
-    status.style.color = 'var(--flag)';
-    return;
-  }
-  dlBtn.onclick = function(){ downloadResultFile(report.fileText); };
-  dlBtn.classList.remove('hidden');
-
-  deliveryInProgress = true;
-  await wait(Math.floor(Math.random()*2500));   // spreads out many students finishing at the same moment
-  const outcome = {email:'off', sheet:'off'};
-  const jobs = [];
-
-  const emailReady = !!(EMAILJS_SERVICE_ID && EMAILJS_SERVICE_ID!=='YOUR_SERVICE_ID' && EMAILJS_TEMPLATE_ID && EMAILJS_PUBLIC_KEY);
-  if(!window.emailjs){
-    outcome.email = 'failed (the EmailJS script did not load)';
-    console.error('EmailJS not loaded');
-  } else if(!emailReady){
-    outcome.email = 'failed (settings missing)';
-  } else {
-    jobs.push(
-      withRetries(function(){ return emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, report.params, {publicKey: EMAILJS_PUBLIC_KEY}); }, [2000, 5000, 10000, 20000, 30000])
-        .then(function(){ outcome.email = 'sent'; })
-        .catch(function(err){
-          console.error('EmailJS error:', err);
-          // Last try: a short version without the long answers (in case the full email was too big).
-          return emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, report.paramsShort, {publicKey: EMAILJS_PUBLIC_KEY})
-            .then(function(){ outcome.email = 'sent (answers shortened)'; })
-            .catch(function(err2){ console.error('EmailJS short copy error:', err2); outcome.email = 'failed ('+describeError(err)+')'; });
-        })
-    );
-  }
-
-  if(SHEET_URL){
-    jobs.push(
-      withRetries(function(){ return saveToSheet(report.record); }, [2000, 5000, 10000, 20000, 30000])
-        .then(function(r){ outcome.sheet = (r==='saved') ? 'saved' : 'sent (not confirmed)'; })
-        .catch(function(err){ console.error('Sheet error:', err); outcome.sheet = 'failed ('+describeError(err)+')'; })
-    );
-  }
-
-  await Promise.all(jobs);
+  status.textContent = 'Sending your test to the school… Please do not close this page. / Sınavınız okula gönderiliyor… Lütfen bu sayfayı kapatmayın.';
+  const submission = collectSubmission(newSubmissionId());
+  const ok = await submitTest(submission);
   deliveryInProgress = false;
-
-  const delivered = outcome.email==='sent' || outcome.email==='sent (answers shortened)' || outcome.sheet==='saved' || outcome.sheet==='sent (not confirmed)';
-  if(delivered){
-    status.textContent = 'Your results have been submitted ✓';
-    status.style.color = 'var(--ink)';
+  status.hidden = true;
+  if(ok){
+    done.hidden = false;
   } else {
-    status.textContent = 'We could not send your results automatically. Please download your result file below and send it to the academy.';
-    status.style.color = 'var(--flag)';
+    failBox.hidden = false;
+    document.getElementById('download-btn').addEventListener('click', function(){ downloadResultFile(answersFileText(submission)); });
   }
-  detail.textContent = 'Email: '+outcome.email+'  ·  Backup: '+outcome.sheet;
+
+  const writingDone = submission.writing.filter(function(w){ return w.answer; }).length;
+  const speakingDone = submission.speaking.filter(function(sp){ return sp.recorded; }).length;
+  document.getElementById('ws-summary').textContent = 'Writing: '+writingDone+'/'+writing.length+' answered. Speaking: '+speakingDone+'/'+speaking.length+' recorded.';
+
+  document.getElementById('review-btn').addEventListener('click', function(){
+    const box = document.getElementById('recordings-review');
+    box.classList.toggle('hidden');
+    if(box.classList.contains('hidden')) return;
+    box.innerHTML = '';
+    speaking.forEach(function(sp,i){
+      const rec = results.speaking['spk-'+i];
+      const tr = results.transcripts['spk-'+i];
+      if(rec){
+        const wrap = document.createElement('div');
+        wrap.style.marginBottom='16px';
+        wrap.innerHTML = '<p style="margin-bottom:6px;"><strong>'+escapeHtml(sp.prompt)+'</strong></p><audio controls src="'+escapeHtml(rec.url)+'"></audio>'+(tr ? '<p style="font-size:13px;margin-top:6px;">Transcript: '+escapeHtml(tr)+'</p>' : '');
+        box.appendChild(wrap);
+      }
+    });
+    writing.forEach(function(w,i){
+      const ans = results.writing['wrt-'+i];
+      if(ans){
+        const wrap = document.createElement('div');
+        wrap.style.marginBottom='16px';
+        wrap.innerHTML = '<p style="margin-bottom:4px;"><strong>'+escapeHtml(w.prompt)+'</strong></p><p style="color:var(--ink);">'+escapeHtml(ans)+'</p>';
+        box.appendChild(wrap);
+      }
+    });
+  });
 }
 </script>
 </body>
