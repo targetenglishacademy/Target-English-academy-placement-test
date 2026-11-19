@@ -165,6 +165,7 @@
       <label for="kvkk-consent" style="font-size:13px;color:var(--ink-soft);line-height:1.5;">Bunu onaylayarak, Kişisel Verilerin Korunması Kanunu (KVKK) kapsamında, verdiğiniz kişisel bilgilerin (e-posta, telefon, meslek vb.) sınav amacıyla toplanmasını, işlenmesini ve saklanmasını kabul ediyorum. *</label>
     </div>
 
+    <p style="font-size:13px;color:var(--flag);line-height:1.5;margin:4px 0 14px;">⚠ Do not use AI, translation tools or copy-paste. Pasting text and leaving this page are recorded. Answers that are not your own are not counted and lower your result.<br>⚠ Yapay zekâ, çeviri araçları veya kopyala-yapıştır kullanmayın. Metin yapıştırmak ve bu sayfadan ayrılmak kaydedilir. Size ait olmayan cevaplar sayılmaz ve sonucunuzu düşürür.</p>
     <button class="btn" id="start-btn" style="width:100%;padding:16px;font-size:16px;" disabled>Sınava Başla</button>
   </section>
 
@@ -296,6 +297,48 @@ const speaking = [
 const TRANSCRIBE_URL = 'https://damp-rice-b8d0.sarah-ak0306.workers.dev';
 const SUBMIT_URL = TRANSCRIBE_URL.replace(/\/+$/,'') + '/submit';
 const pendingJobs = [];
+
+// ---- Fair-test signals: sent to the school only, never shown to the student ----
+const integrity = { paste: {}, bulk: {}, away_count: 0, away_seconds: 0 };
+let testRunning = false, awayStart = 0;
+const ownCopies = [];   // text the student copied or cut from their own answers (moving it around is fine)
+const normText = function(t){ return String(t||'').toLowerCase().replace(/\s+/g,' ').trim(); };
+function currentWritingId(target){
+  if(!target || target.id!=='writing-input') return null;
+  const item = queue[idx];
+  return item && item.type==='writing' ? item.id : null;
+}
+function isOwnText(text, ta){
+  const t = normText(text);
+  if(normText(Object.values(results.writing).join('\n')+'\n'+(ta ? ta.value : '')).includes(t)) return true;
+  return ownCopies.some(function(c){ return c.includes(t); });
+}
+['copy','cut'].forEach(function(type){
+  document.addEventListener(type, function(e){
+    const ta = e.target;
+    if(!currentWritingId(ta)) return;
+    const sel = ta.value.substring(ta.selectionStart||0, ta.selectionEnd||0);
+    if(sel){ ownCopies.push(normText(sel)); if(ownCopies.length>50) ownCopies.shift(); }
+  }, true);
+});
+function recordPaste(e, text){
+  const id = currentWritingId(e.target);
+  if(!id || normText(text).length < 20 || isOwnText(text, e.target)) return;
+  integrity.paste[id] = (integrity.paste[id]||0) + text.length;
+}
+document.addEventListener('paste', function(e){ recordPaste(e, (e.clipboardData && e.clipboardData.getData('text')) || ''); }, true);
+document.addEventListener('drop', function(e){ recordPaste(e, (e.dataTransfer && e.dataTransfer.getData('text')) || ''); }, true);
+document.addEventListener('input', function(e){
+  const id = currentWritingId(e.target);
+  if(!id || e.inputType==='insertFromPaste' || e.inputType==='insertFromDrop') return;
+  const d = e.data || '';
+  if(d.length >= 40 && !isOwnText(d, null)) integrity.bulk[id] = (integrity.bulk[id]||0) + d.length;
+}, true);
+document.addEventListener('visibilitychange', function(){
+  if(!testRunning || finished) return;
+  if(document.hidden){ integrity.away_count++; awayStart = Date.now(); }
+  else if(awayStart){ integrity.away_seconds += Math.round((Date.now()-awayStart)/1000); awayStart = 0; }
+});
 
 // Show student text safely on the page (never as HTML).
 function escapeHtml(s){
@@ -457,6 +500,7 @@ document.getElementById('start-btn').addEventListener('click', ()=>{
   screenIntro.classList.add('hidden');
   screenTest.classList.remove('hidden');
   startTestTimer();
+  testRunning = true;
   renderQuestion();
 });
 
@@ -794,6 +838,8 @@ function collectSubmission(id){
     consent: !!(consentBox && consentBox.checked),
     student: { name: studentName, phone: studentPhone, email: studentEmail, job: studentJob, parent_name: parentName },
     device: (navigator.userAgent || '').slice(0,200),
+    integrity: { paste: integrity.paste, bulk: integrity.bulk, away_count: integrity.away_count,
+                 away_seconds: integrity.away_seconds + (awayStart ? Math.round((Date.now()-awayStart)/1000) : 0) },
     mcq: mcq.map(function(it,i){ const v = results.mcq['mcq-'+i]; return {level: it.level, answered: v!==undefined, correct: v===true}; }),
     listening: listening.map(function(it,i){ const v = results.listening['lst-'+i]; return {level: it.level, answered: v!==undefined, correct: v===true}; }),
     writing: writing.map(function(w,i){ return {level: w.level, prompt: w.prompt, answer: (results.writing['wrt-'+i]||'').slice(0,3000)}; }),
